@@ -2,42 +2,49 @@
 
 Schedule, run, and track AI agents with zero infra.
 
-One SQLite file. No Redis, no Docker, no queue. Just `pip install watchd` and a Python file.
+One SQLite file. No Redis, no Docker, no queue. Just `uv add watchd` and drop agent files in a folder.
 
 ## Install
 
 ```bash
-pip install watchd
+uv add watchd
+
+# with LLM support
+uv add "watchd[ai]"
 ```
 
 ## Quick start
 
+```bash
+watchd init
+```
+
+This creates `watchd.toml` and a `watchd_agents/` folder with an example agent. Edit `watchd_agents/example.py` or create your own:
+
+```bash
+watchd new site_check
+```
+
+`watchd_agents/site_check.py`:
+
 ```python
-# app.py
-from watchd import Watchd, every
+from watchd import agent, every
 
-app = Watchd()
 
-@app.agent(schedule=every.minutes(5))
+@agent(schedule=every.minutes(5))
 def site_check(ctx):
-    import httpx
-    resp = httpx.get("https://example.com")
-    ctx.state["last_status"] = resp.status_code
-    return resp.status_code
-
-@app.agent(schedule=every.day.at("09:00"))
-def daily_report(ctx):
-    history = ctx.history  # last 10 runs across all agents
-    ctx.log.info("generating_report", runs=len(history))
-    return "report done"
+    import urllib.request
+    r = urllib.request.urlopen("https://example.com")
+    ctx.state["last_status"] = r.status
+    return r.status
 ```
 
 Run it:
 
 ```bash
-watchd start              # start scheduler
-watchd run site_check     # run one agent now
 watchd list               # list agents + schedules
+watchd run site_check     # run one agent now
+watchd up                 # start scheduler
 watchd history            # show run history
 watchd state site_check   # show persisted state
 ```
@@ -70,7 +77,7 @@ Every agent receives a `ctx` object with:
 watchd doesn't wrap LLM clients. Use whatever SDK you want:
 
 ```python
-@app.agent(schedule=every.hour)
+@agent(schedule=every.hour)
 def reviewer(ctx):
     from anthropic import Anthropic
     client = Anthropic()
@@ -86,10 +93,29 @@ def reviewer(ctx):
 ## Retries
 
 ```python
-@app.agent(schedule=every.minutes(5), retries=3)
+@agent(schedule=every.minutes(5), retries=3)
 def flaky_check(ctx):
     # will retry up to 3 times on exception
     ...
+```
+
+## Legacy mode
+
+If you prefer the programmatic API, it still works:
+
+```python
+# app.py
+from watchd import Watchd, every
+
+app = Watchd()
+
+@app.agent(schedule=every.minutes(5))
+def site_check(ctx):
+    return "ok"
+```
+
+```bash
+watchd start --app app:app
 ```
 
 ## How it works
@@ -101,6 +127,27 @@ watchd is three things:
 3. **State store** - per-agent key/value persistence across runs
 
 Everything lives in a single SQLite file (`watchd.db` by default).
+
+## Local development
+
+```bash
+# clone and install in editable mode
+git clone https://github.com/level09/watchd.git
+cd watchd
+uv sync
+
+# run tests
+uv run python -m pytest
+
+# lint and format
+uv run ruff check src/ tests/
+uv run ruff format src/ tests/
+
+# use the CLI from the local checkout
+uv run watchd init
+uv run watchd list
+uv run watchd run example
+```
 
 ## License
 
