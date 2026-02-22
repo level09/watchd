@@ -171,7 +171,11 @@ def deploy(config):
 
     # Symlink shared db at the exact path config.db expects.
     # e.g. db="./data/watchd.db" -> mkdir data/, symlink data/watchd.db -> shared/watchd.db
-    db_rel = config.db.lstrip("./")
+    db_path = Path(config.db)
+    if db_path.is_absolute() or ".." in db_path.parts:
+        print(f"  deploy requires a relative db path without '..', got: {config.db}", file=sys.stderr)
+        sys.exit(1)
+    db_rel = str(db_path).removeprefix("./")
     db_name = Path(db_rel).name
     db_parent = str(Path(db_rel).parent)
     if db_parent != ".":

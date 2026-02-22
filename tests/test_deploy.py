@@ -256,6 +256,38 @@ def test_deploy_db_subdir_path(mock_run, mock_sleep, tmp_path, monkeypatch):
     assert len(ln_calls) == 1
 
 
+@patch("watchd.deploy.time.sleep")
+@patch("watchd.deploy.subprocess.run")
+def test_deploy_rejects_absolute_db_path(mock_run, mock_sleep, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "watchd.toml").write_text("[watchd]\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\n")
+    (tmp_path / "watchd_agents").mkdir()
+
+    calls, track_run = _make_tracker()
+    mock_run.side_effect = track_run
+    dc = DeployConfig(host="u@host", path="~/myapp")
+    config = Config(db="/absolute/path/watchd.db", deploy=dc)
+    with pytest.raises(SystemExit):
+        deploy(config)
+
+
+@patch("watchd.deploy.time.sleep")
+@patch("watchd.deploy.subprocess.run")
+def test_deploy_rejects_dotdot_db_path(mock_run, mock_sleep, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "watchd.toml").write_text("[watchd]\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\n")
+    (tmp_path / "watchd_agents").mkdir()
+
+    calls, track_run = _make_tracker()
+    mock_run.side_effect = track_run
+    dc = DeployConfig(host="u@host", path="~/myapp")
+    config = Config(db="../escape/watchd.db", deploy=dc)
+    with pytest.raises(SystemExit):
+        deploy(config)
+
+
 # --- prune_releases ---
 
 
