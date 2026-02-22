@@ -184,16 +184,6 @@ def up(
 
 
 @app.command
-def start(
-    *,
-    app_path: Annotated[str | None, cyclopts.Parameter(name="--app")] = None,
-):
-    """Start the scheduler (legacy, same as 'up')."""
-    watchd = _resolve(app_path)
-    watchd.start()
-
-
-@app.command
 def run(
     agent_name: str,
     *,

@@ -61,6 +61,8 @@ class StateProxy(MutableMapping):
         return len(self._data)
 
     def flush(self):
+        if self._data is None:
+            return
         if self._deleted_keys:
             self._store.delete_state_keys(self._agent, self._deleted_keys)
             self._deleted_keys.clear()

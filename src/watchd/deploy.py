@@ -169,8 +169,9 @@ def deploy(config):
     print("  Installing dependencies...")
     _ssh(dc.host, f"cd {release_dir} && uv sync")
 
-    # Symlink shared db
-    _ssh(dc.host, f"ln -sfn ../../shared/watchd.db {release_dir}/watchd.db")
+    # Symlink shared db (use configured db path, default watchd.db)
+    db_name = Path(config.db).name
+    _ssh(dc.host, f"ln -sfn ../../shared/{db_name} {release_dir}/{db_name}")
 
     # Atomic symlink swap
     print("  Swapping symlink...")

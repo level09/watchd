@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import io
+import sys
+import threading
 import traceback
-from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -13,8 +14,42 @@ import structlog
 from watchd.agent import Agent, AgentContext
 from watchd.store import Run, Store
 
+_local = threading.local()
+
+
+class _ThreadSafeStream:
+    """Wraps sys.stdout so each thread can capture to its own buffer.
+
+    When _local.buf is set (during agent execution), output goes to that
+    buffer AND to the original stream. When unset, output goes only to
+    the original stream. Thread-safe because threading.local gives each
+    thread its own buf attribute.
+    """
+
+    def __init__(self, original):
+        self._original = original
+
+    def write(self, s):
+        buf = getattr(_local, "buf", None)
+        if buf is not None:
+            buf.write(s)
+        return self._original.write(s)
+
+    def flush(self):
+        self._original.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._original, name)
+
+
+def _install_capture():
+    if not isinstance(sys.stdout, _ThreadSafeStream):
+        sys.stdout = _ThreadSafeStream(sys.stdout)
+
 
 def execute_agent(agent: Agent, store: Store) -> Run:
+    _install_capture()
+
     run_id = uuid4().hex[:12]
     log = structlog.get_logger().bind(agent=agent.name, run_id=run_id)
     ctx = AgentContext(agent.name, run_id, store, log)
@@ -26,13 +61,13 @@ def execute_agent(agent: Agent, store: Store) -> Run:
     attempts = 1 + agent.retries
     last_error = None
 
-    stdout_buf = io.StringIO()
+    buf = io.StringIO()
+    _local.buf = buf
 
     try:
         for attempt in range(1, attempts + 1):
             try:
-                with redirect_stdout(stdout_buf):
-                    result = agent.fn(ctx)
+                result = agent.fn(ctx)
                 run.status = "success"
                 run.result = str(result) if result is not None else None
                 last_error = None
@@ -52,8 +87,9 @@ def execute_agent(agent: Agent, store: Store) -> Run:
         run.error = f"{type(e).__name__}: {e}"
         raise
     finally:
+        _local.buf = None
         ctx.state.flush()
-        run.output = stdout_buf.getvalue() or None
+        run.output = buf.getvalue() or None
         run.finished_at = datetime.now(timezone.utc)
         run.duration_ms = (run.finished_at - run.started_at).total_seconds() * 1000
         store.update_run(run)
