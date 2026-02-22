@@ -155,21 +155,7 @@ def test_deploy_flow_sequence(mock_run, mock_sleep, tmp_path, monkeypatch):
     (tmp_path / "pyproject.toml").write_text("[project]\n")
     (tmp_path / "watchd_agents").mkdir()
 
-    calls = []
-
-    def track_run(args, **kwargs):
-        cmd = " ".join(str(a) for a in args)
-        calls.append(cmd)
-        if "realpath" in cmd:
-            return _ok("/home/user/myapp/releases/123\n")
-        if "command -v uv" in cmd:
-            return _ok("/home/user/.local/bin/uv\n")
-        if "is-active" in cmd:
-            return _ok("active\n")
-        if "ls -1t" in cmd:
-            return _ok("20260222-150102\n")
-        return _ok()
-
+    calls, track_run = _make_tracker()
     mock_run.side_effect = track_run
     dc = DeployConfig(host="u@host", path="~/myapp")
     config = Config(deploy=dc)
@@ -188,15 +174,7 @@ def test_deploy_flow_sequence(mock_run, mock_sleep, tmp_path, monkeypatch):
     assert restart_idx > symlink_idx
 
 
-@patch("watchd.deploy.time.sleep")
-@patch("watchd.deploy.subprocess.run")
-def test_env_file_transferred_when_exists(mock_run, mock_sleep, tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "watchd.toml").write_text("[watchd]\n")
-    (tmp_path / "pyproject.toml").write_text("[project]\n")
-    (tmp_path / "watchd_agents").mkdir()
-    (tmp_path / ".env").write_text("SECRET=abc\n")
-
+def _make_tracker():
     calls = []
 
     def track_run(args, **kwargs):
@@ -210,14 +188,28 @@ def test_env_file_transferred_when_exists(mock_run, mock_sleep, tmp_path, monkey
             return _ok("active\n")
         if "ls -1t" in cmd:
             return _ok("20260222-150102\n")
+        if "&& pwd" in cmd:
+            return _ok("/home/user/myapp/shared\n")
         return _ok()
 
+    return calls, track_run
+
+
+@patch("watchd.deploy.time.sleep")
+@patch("watchd.deploy.subprocess.run")
+def test_env_file_transferred_when_exists(mock_run, mock_sleep, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "watchd.toml").write_text("[watchd]\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\n")
+    (tmp_path / "watchd_agents").mkdir()
+    (tmp_path / ".env").write_text("SECRET=abc\n")
+
+    calls, track_run = _make_tracker()
     mock_run.side_effect = track_run
     dc = DeployConfig(host="u@host", path="~/myapp")
     config = Config(deploy=dc)
     deploy(config)
 
-    # .env was rsync'd separately (not as an --exclude flag)
     env_transfer = [c for c in calls if "rsync" in c and c.endswith(".env")]
     assert len(env_transfer) >= 1
 
@@ -230,29 +222,38 @@ def test_env_file_not_transferred_when_missing(mock_run, mock_sleep, tmp_path, m
     (tmp_path / "pyproject.toml").write_text("[project]\n")
     (tmp_path / "watchd_agents").mkdir()
 
-    calls = []
-
-    def track_run(args, **kwargs):
-        cmd = " ".join(str(a) for a in args)
-        calls.append(cmd)
-        if "realpath" in cmd:
-            return _ok("/home/user/myapp/releases/123\n")
-        if "command -v uv" in cmd:
-            return _ok("/home/user/.local/bin/uv\n")
-        if "is-active" in cmd:
-            return _ok("active\n")
-        if "ls -1t" in cmd:
-            return _ok("20260222-150102\n")
-        return _ok()
-
+    calls, track_run = _make_tracker()
     mock_run.side_effect = track_run
     dc = DeployConfig(host="u@host", path="~/myapp")
     config = Config(deploy=dc)
     deploy(config)
 
-    # No separate .env rsync transfer (only exclude flags)
     env_transfer = [c for c in calls if "rsync" in c and c.endswith(".env")]
     assert len(env_transfer) == 0
+
+
+@patch("watchd.deploy.time.sleep")
+@patch("watchd.deploy.subprocess.run")
+def test_deploy_db_subdir_path(mock_run, mock_sleep, tmp_path, monkeypatch):
+    """db = './data/watchd.db' should mkdir data/ and symlink correctly."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "watchd.toml").write_text("[watchd]\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\n")
+    (tmp_path / "watchd_agents").mkdir()
+
+    calls, track_run = _make_tracker()
+    mock_run.side_effect = track_run
+    dc = DeployConfig(host="u@host", path="~/myapp")
+    config = Config(db="./data/watchd.db", deploy=dc)
+    deploy(config)
+
+    # Should mkdir the data/ subdir inside the release
+    mkdir_calls = [c for c in calls if "mkdir -p" in c and "/data" in c]
+    assert len(mkdir_calls) >= 1
+
+    # Symlink target should be the absolute shared path, link at data/watchd.db
+    ln_calls = [c for c in calls if "ln -sfn" in c and "shared" in c and "data/watchd.db" in c]
+    assert len(ln_calls) == 1
 
 
 # --- prune_releases ---
