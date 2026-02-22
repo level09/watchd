@@ -247,7 +247,7 @@ watchd state <name>      # inspect persisted state
 ## How it works
 
 1. **Scheduler** wraps APScheduler 3.x. Your agents run on their defined schedules.
-2. **Run tracker** logs every execution with status, timing, captured stdout/stderr, and errors.
+2. **Run tracker** logs every execution with status, timing, captured stdout, and errors.
 3. **State store** gives each agent persistent memory across runs.
 
 Everything lives in one SQLite file. No external services.
