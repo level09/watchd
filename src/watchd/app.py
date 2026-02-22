@@ -58,6 +58,7 @@ class Watchd:
             log.info("shutting_down")
             if self.scheduler:
                 self.scheduler.shutdown(wait=False)
+            self.store.close()
             sys.exit(0)
 
         signal.signal(signal.SIGINT, _shutdown)

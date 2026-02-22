@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import traceback
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -24,10 +26,14 @@ def execute_agent(agent: Agent, store: Store) -> Run:
     attempts = 1 + agent.retries
     last_error = None
 
+    stdout_buf = io.StringIO()
+    stderr_buf = io.StringIO()
+
     try:
         for attempt in range(1, attempts + 1):
             try:
-                result = agent.fn(ctx)
+                with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
+                    result = agent.fn(ctx)
                 run.status = "success"
                 run.result = str(result) if result is not None else None
                 last_error = None
@@ -48,6 +54,11 @@ def execute_agent(agent: Agent, store: Store) -> Run:
         raise
     finally:
         ctx.state.flush()
+        output = stdout_buf.getvalue()
+        err_output = stderr_buf.getvalue()
+        if err_output:
+            output = output + "\n[stderr]\n" + err_output if output else err_output
+        run.output = output or None
         run.finished_at = datetime.now(timezone.utc)
         run.duration_ms = (run.finished_at - run.started_at).total_seconds() * 1000
         store.update_run(run)

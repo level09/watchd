@@ -118,3 +118,40 @@ def test_run_persisted_to_db(store):
     runs = store.get_runs("test")
     assert len(runs) == 1
     assert runs[0].status == "success"
+
+
+def test_stdout_captured(store):
+    store.sync_agent("test")
+
+    def chatty_fn(ctx):
+        print("hello from agent")
+        return "done"
+
+    agent = Agent(name="test", fn=chatty_fn, schedule=None)
+    run = execute_agent(agent, store)
+    assert run.status == "success"
+    assert "hello from agent" in run.output
+
+
+def test_stderr_captured(store):
+    import sys
+
+    store.sync_agent("test")
+
+    def noisy_fn(ctx):
+        print("hello stdout")
+        print("warning!", file=sys.stderr)
+        return "done"
+
+    agent = Agent(name="test", fn=noisy_fn, schedule=None)
+    run = execute_agent(agent, store)
+    assert "hello stdout" in run.output
+    assert "[stderr]" in run.output
+    assert "warning!" in run.output
+
+
+def test_no_output_is_none(store):
+    store.sync_agent("test")
+    agent = Agent(name="test", fn=lambda ctx: "quiet", schedule=None)
+    run = execute_agent(agent, store)
+    assert run.output is None
