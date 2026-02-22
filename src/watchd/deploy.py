@@ -92,6 +92,9 @@ def _validate_local(config):
     agents_dir = Path.cwd() / config.agents_dir
     if not agents_dir.is_dir():
         errors.append(f"agents directory '{config.agents_dir}' not found")
+    db_path = Path(config.db)
+    if db_path.is_absolute() or ".." in db_path.parts:
+        errors.append(f"db path must be relative without '..', got: {config.db}")
     if errors:
         for e in errors:
             print(f"  [FAIL] {e}", file=sys.stderr)
@@ -171,11 +174,7 @@ def deploy(config):
 
     # Symlink shared db at the exact path config.db expects.
     # e.g. db="./data/watchd.db" -> mkdir data/, symlink data/watchd.db -> shared/watchd.db
-    db_path = Path(config.db)
-    if db_path.is_absolute() or ".." in db_path.parts:
-        print(f"  deploy requires a relative db path without '..', got: {config.db}", file=sys.stderr)
-        sys.exit(1)
-    db_rel = str(db_path).removeprefix("./")
+    db_rel = config.db.removeprefix("./")
     db_name = Path(db_rel).name
     db_parent = str(Path(db_rel).parent)
     if db_parent != ".":

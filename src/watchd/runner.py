@@ -15,6 +15,7 @@ from watchd.agent import Agent, AgentContext
 from watchd.store import Run, Store
 
 _local = threading.local()
+_original_stdout = None
 
 
 class _ThreadSafeStream:
@@ -35,6 +36,10 @@ class _ThreadSafeStream:
             buf.write(s)
         return self._original.write(s)
 
+    def writelines(self, lines):
+        for line in lines:
+            self.write(line)
+
     def flush(self):
         self._original.flush()
 
@@ -42,13 +47,24 @@ class _ThreadSafeStream:
         return getattr(self._original, name)
 
 
-def _install_capture():
+def install_capture():
+    """Replace sys.stdout with a thread-safe capturing wrapper."""
+    global _original_stdout
     if not isinstance(sys.stdout, _ThreadSafeStream):
+        _original_stdout = sys.stdout
         sys.stdout = _ThreadSafeStream(sys.stdout)
 
 
+def uninstall_capture():
+    """Restore the original sys.stdout."""
+    global _original_stdout
+    if _original_stdout is not None:
+        sys.stdout = _original_stdout
+        _original_stdout = None
+
+
 def execute_agent(agent: Agent, store: Store) -> Run:
-    _install_capture()
+    install_capture()
 
     run_id = uuid4().hex[:12]
     log = structlog.get_logger().bind(agent=agent.name, run_id=run_id)
