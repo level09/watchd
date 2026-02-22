@@ -105,11 +105,20 @@ def _resolve_legacy(app_path: str | None):
 
 
 def _resolve(app_path: str | None = None):
-    """Try config+discovery first, fall back to legacy --app."""
+    """Try config+discovery first, fall back to legacy --app.
+
+    When --app is explicitly passed, skip config discovery entirely.
+    """
+    if app_path:
+        watchd = _resolve_legacy(app_path)
+        if watchd:
+            return watchd
+        raise cyclopts.ValidationError(f"Could not load app from '{app_path}'")
+
     watchd = _resolve_from_config()
     if watchd:
         return watchd
-    watchd = _resolve_legacy(app_path)
+    watchd = _resolve_legacy(None)
     if watchd:
         return watchd
     raise cyclopts.ValidationError(
@@ -144,11 +153,19 @@ def init():
 @app.command
 def new(name: str):
     """Scaffold a new agent file in the agents directory."""
+    if not name.isidentifier():
+        print(f"Invalid agent name: '{name}'. Must be a valid Python identifier.", file=sys.stderr)
+        sys.exit(1)
+
     config = load_config()
     agents_dir = Path.cwd() / config.agents_dir
     agents_dir.mkdir(exist_ok=True)
 
-    filepath = agents_dir / f"{name}.py"
+    filepath = (agents_dir / f"{name}.py").resolve()
+    if not filepath.is_relative_to(agents_dir.resolve()):
+        print(f"Invalid agent name: '{name}'.", file=sys.stderr)
+        sys.exit(1)
+
     if filepath.exists():
         print(f"Already exists: {filepath.relative_to(Path.cwd())}")
         return
@@ -275,6 +292,18 @@ def state(
         print(f"No state for agent '{agent_name}'.")
         return
     print(json.dumps(data, indent=2, default=str))
+
+
+@app.command
+def deploy(*, check: bool = False):
+    """Deploy agents to a remote server via SSH."""
+    from watchd.deploy import deploy as run_deploy, preflight
+
+    config = load_config()
+    if check:
+        ok = preflight(config)
+        sys.exit(0 if ok else 1)
+    run_deploy(config)
 
 
 def _print_run(r):
