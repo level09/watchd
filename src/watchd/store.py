@@ -116,10 +116,20 @@ class Store:
         )
         self.conn.commit()
 
+    def get_run(self, run_id: str) -> Run | None:
+        row = self.conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+        return _row_to_run(row) if row else None
+
     def get_runs(self, agent_name: str, limit: int = 20) -> list[Run]:
         rows = self.conn.execute(
             "SELECT * FROM runs WHERE agent=? ORDER BY started_at DESC LIMIT ?",
             (agent_name, limit),
+        ).fetchall()
+        return [_row_to_run(r) for r in rows]
+
+    def get_all_runs(self, limit: int = 20) -> list[Run]:
+        rows = self.conn.execute(
+            "SELECT * FROM runs ORDER BY started_at DESC LIMIT ?", (limit,)
         ).fetchall()
         return [_row_to_run(r) for r in rows]
 
@@ -140,15 +150,22 @@ class Store:
         self.conn.commit()
 
     def set_state_bulk(self, agent_name: str, data: dict[str, object]):
-        for key, value in data.items():
-            self.conn.execute(
-                """INSERT INTO agent_state (agent, key, value) VALUES (?, ?, ?)
-                   ON CONFLICT(agent, key) DO UPDATE SET
-                     value = excluded.value,
-                     updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
-                (agent_name, key, json.dumps(value)),
-            )
-        self.conn.commit()
+        with self.conn:
+            for key, value in data.items():
+                self.conn.execute(
+                    """INSERT INTO agent_state (agent, key, value) VALUES (?, ?, ?)
+                       ON CONFLICT(agent, key) DO UPDATE SET
+                         value = excluded.value,
+                         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
+                    (agent_name, key, json.dumps(value)),
+                )
+
+    def delete_state_keys(self, agent_name: str, keys: set[str]):
+        with self.conn:
+            for key in keys:
+                self.conn.execute(
+                    "DELETE FROM agent_state WHERE agent=? AND key=?", (agent_name, key)
+                )
 
     def get_all_agents(self) -> list[dict]:
         rows = self.conn.execute("SELECT * FROM agents ORDER BY name").fetchall()

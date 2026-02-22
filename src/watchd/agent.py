@@ -31,6 +31,7 @@ class StateProxy(MutableMapping):
         self._agent = agent_name
         self._data: dict | None = None
         self._dirty: dict[str, object] = {}
+        self._deleted_keys: set[str] = set()
 
     def _load(self):
         if self._data is None:
@@ -48,10 +49,8 @@ class StateProxy(MutableMapping):
     def __delitem__(self, key):
         self._load()
         del self._data[key]
-        self._store.conn.execute(
-            "DELETE FROM agent_state WHERE agent=? AND key=?", (self._agent, key)
-        )
-        self._store.conn.commit()
+        self._deleted_keys.add(key)
+        self._dirty.pop(key, None)
 
     def __iter__(self):
         self._load()
@@ -62,6 +61,9 @@ class StateProxy(MutableMapping):
         return len(self._data)
 
     def flush(self):
+        if self._deleted_keys:
+            self._store.delete_state_keys(self._agent, self._deleted_keys)
+            self._deleted_keys.clear()
         if self._dirty:
             self._store.set_state_bulk(self._agent, self._dirty)
             self._dirty.clear()

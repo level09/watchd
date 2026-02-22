@@ -92,3 +92,32 @@ def test_state_bulk(store):
     store.set_state_bulk("agent1", {"a": 1, "b": "hello", "c": [1, 2, 3]})
     state = store.get_state("agent1")
     assert state == {"a": 1, "b": "hello", "c": [1, 2, 3]}
+
+
+def test_get_run_by_id(store):
+    store.sync_agent("agent1")
+    now = datetime.now(timezone.utc)
+    run = Run(id="findme", agent="agent1", status="success", started_at=now)
+    store.save_run(run)
+    found = store.get_run("findme")
+    assert found is not None
+    assert found.id == "findme"
+    assert store.get_run("nonexistent") is None
+
+
+def test_get_all_runs(store):
+    store.sync_agent("a1")
+    store.sync_agent("a2")
+    now = datetime.now(timezone.utc)
+    store.save_run(Run(id="r1", agent="a1", status="success", started_at=now))
+    store.save_run(Run(id="r2", agent="a2", status="error", started_at=now))
+    all_runs = store.get_all_runs(limit=10)
+    assert len(all_runs) == 2
+
+
+def test_delete_state_keys(store):
+    store.sync_agent("agent1")
+    store.set_state_bulk("agent1", {"a": 1, "b": 2, "c": 3})
+    store.delete_state_keys("agent1", {"a", "c"})
+    state = store.get_state("agent1")
+    assert state == {"b": 2}
