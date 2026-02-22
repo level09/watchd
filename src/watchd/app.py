@@ -8,7 +8,7 @@ import sys
 import structlog
 
 from watchd.agent import Agent
-from watchd.runner import execute_agent
+from watchd.runner import execute_agent, install_capture, uninstall_capture
 from watchd.schedule import Schedule
 from watchd.store import Store
 
@@ -37,6 +37,7 @@ class Watchd:
         """Start scheduler and block."""
         from apscheduler.schedulers.blocking import BlockingScheduler
 
+        install_capture()
         self.store.init()
         self._sync_agents()
 
@@ -58,6 +59,7 @@ class Watchd:
             log.info("shutting_down")
             if self.scheduler:
                 self.scheduler.shutdown(wait=False)
+            uninstall_capture()
             self.store.close()
             sys.exit(0)
 
@@ -69,9 +71,13 @@ class Watchd:
 
     def run(self, agent_name: str):
         """Run one agent immediately."""
-        self.store.init()
-        self._sync_agents()
-        return self._execute(agent_name)
+        install_capture()
+        try:
+            self.store.init()
+            self._sync_agents()
+            return self._execute(agent_name)
+        finally:
+            uninstall_capture()
 
     def _execute(self, agent_name: str):
         agent = self.agents.get(agent_name)
