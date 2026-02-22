@@ -1,0 +1,56 @@
+[project]
+name = "watchd"
+version = "0.1.0"
+description = "Schedule, run, and track AI agents with zero infra."
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "level09", email = "level09@gmail.com" }
+]
+requires-python = ">=3.11"
+keywords = ["ai", "agents", "scheduler", "cron", "monitoring", "automation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Monitoring",
+    "Typing :: Typed",
+]
+dependencies = [
+    "apscheduler>=3.10,<4",
+    "structlog",
+    "cyclopts",
+]
+
+[project.optional-dependencies]
+ai = ["litellm"]
+
+[project.urls]
+Homepage = "https://watchd.dev"
+Documentation = "https://watchd.dev"
+Repository = "https://github.com/level09/watchd"
+Issues = "https://github.com/level09/watchd/issues"
+
+[project.scripts]
+watchd = "watchd.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "ruff>=0.15.2",
+]
