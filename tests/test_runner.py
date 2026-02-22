@@ -133,7 +133,8 @@ def test_stdout_captured(store):
     assert "hello from agent" in run.output
 
 
-def test_stderr_captured(store):
+def test_stderr_not_captured(store):
+    """Stderr goes to terminal (for structlog), only stdout is captured."""
     import sys
 
     store.sync_agent("test")
@@ -146,8 +147,7 @@ def test_stderr_captured(store):
     agent = Agent(name="test", fn=noisy_fn, schedule=None)
     run = execute_agent(agent, store)
     assert "hello stdout" in run.output
-    assert "[stderr]" in run.output
-    assert "warning!" in run.output
+    assert "warning!" not in (run.output or "")
 
 
 def test_no_output_is_none(store):
