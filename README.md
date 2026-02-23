@@ -1,8 +1,17 @@
-# watchd
+<div align="center">
+  <h1>watchd</h1>
+  <h3>Scheduled AI agents with persistent memory. One SQLite file. No infra.</h3>
+</div>
 
-Autonomous AI agents that watch, understand, and act. On a schedule. With memory.
+<div align="center">
+  <a href="https://pypi.org/project/watchd/"><img src="https://img.shields.io/pypi/v/watchd.svg" alt="PyPI"></a>
+  <a href="https://pypi.org/project/watchd/"><img src="https://img.shields.io/pypi/pyversions/watchd.svg" alt="Python"></a>
+  <a href="https://github.com/level09/watchd/blob/master/LICENSE"><img src="https://img.shields.io/github/license/level09/watchd.svg" alt="License"></a>
+</div>
 
-One SQLite file. No Redis, no Docker, no queue.
+---
+
+Drop a Python file in a directory. Give it a schedule. It runs, remembers what it learned, and picks up where it left off next time. No Docker, no Redis, no queue. One SQLite file holds the schedule, the run history, and the agent state.
 
 ## Install
 
@@ -10,22 +19,40 @@ One SQLite file. No Redis, no Docker, no queue.
 uv add "watchd[ai]"
 ```
 
-## Quick start
+Or `pip install "watchd[ai]"` if that's more your speed.
+
+## 30-second version
 
 ```bash
 watchd init          # creates watchd.toml + watchd_agents/
 watchd new my_agent  # scaffold a new agent
-watchd run my_agent  # run once
+watchd run my_agent  # run once, see what happens
 watchd up            # start all agents on their schedules
 ```
 
-## What makes this different
+An agent is just a function with a schedule:
 
-Before LLMs, scheduled tasks were dumb: check a threshold, send an alert. watchd agents **understand context**, **build memory across runs**, and **take intelligent action**. Things that required a team of analysts now fit in a single Python file.
+```python
+from watchd import agent, every
 
-### Contract compliance watchdog
+@agent(schedule=every.hour)
+def my_agent(ctx):
+    previous = ctx.state.get("last_result")
+    # do something, remember it for next time
+    ctx.state["last_result"] = "done"
+```
 
-An agent that reads your vendor contracts, cross-references them against incoming invoices, and flags discrepancies. It remembers pricing terms across runs, so it catches slow drift that no human would notice.
+`ctx.state` persists between runs. That's the whole trick. A cron job forgets everything. A watchd agent accumulates knowledge.
+
+## Why this exists
+
+Scheduled tasks used to be dumb: check a threshold, send an alert. With LLMs, an agent can read documents, compare against prior runs, spot trends, and take action. But the tooling assumes you want Kubernetes, a message queue, and a deployment pipeline. Sometimes you just want a Python file that runs every hour and remembers things.
+
+## Examples
+
+### Contract compliance
+
+Reads invoices, compares against stored contract terms, flags drift:
 
 ```python
 from watchd import agent, every
@@ -51,9 +78,9 @@ def contract_compliance(ctx):
     ctx.state["last_check"] = now_iso()
 ```
 
-### Incident post-mortem writer
+### Incident post-mortems
 
-Watches your monitoring stack. When an incident resolves, it pulls logs, metrics, and the alert timeline, then drafts a post-mortem with root cause analysis, impact summary, and action items. By the time your team opens Slack on Monday, the write-up is already there.
+Watches your monitoring stack. When an incident resolves, it pulls logs, metrics, and the alert timeline, drafts a post-mortem. By Monday morning the write-up is already in Confluence.
 
 ```python
 @agent(schedule=every.minutes(15))
@@ -67,19 +94,15 @@ def postmortem_drafter(ctx):
 
         logs = fetch_logs(inc["service"], inc["start"], inc["end"])
         metrics = fetch_metrics(inc["service"], inc["start"], inc["end"])
-        timeline = inc["alert_history"]
 
         resp = completion(model="claude-sonnet-4-20250514", messages=[{"role": "user", "content": f"""
             Write a post-mortem for this incident.
-
             Service: {inc['service']}
             Duration: {inc['start']} to {inc['end']}
-            Alert timeline: {timeline}
+            Alert timeline: {inc['alert_history']}
             Logs (last 200 lines): {logs[-5000:]}
             Metrics: {metrics}
-
-            Include: summary, root cause, impact, timeline, action items.
-            Be specific. Reference actual log lines and metric values."""}])
+            Include: summary, root cause, impact, timeline, action items."""}])
 
         post_to_confluence(f"Post-mortem: {inc['service']} - {inc['id']}", resp.choices[0].message.content)
         drafted.append(inc["id"])
@@ -88,18 +111,17 @@ def postmortem_drafter(ctx):
     ctx.state["last_seen"] = now_iso()
 ```
 
-### Customer churn predictor
+### Churn prediction
 
-Analyzes support tickets, usage metrics, and billing patterns to identify customers showing early signs of churn. It builds a profile per customer over time, so each week's analysis has more context than the last.
+Builds a per-customer profile over time. Each week's analysis has more context than the last.
 
 ```python
 @agent(schedule=every.monday.at("06:00"))
 def churn_radar(ctx):
     profiles = ctx.state.get("customer_profiles", {})
-    customers = fetch_active_customers()
 
     at_risk = []
-    for cust in customers:
+    for cust in fetch_active_customers():
         tickets = fetch_tickets(cust["id"], days=30)
         usage = fetch_usage_trend(cust["id"], days=90)
         history = profiles.get(cust["id"], "New customer, no prior analysis.")
@@ -109,15 +131,12 @@ def churn_radar(ctx):
             Previous analysis: {history}
             Recent tickets: {tickets}
             Usage trend (90d): {usage}
-
-            Assess churn risk (low/medium/high). Explain your reasoning.
-            Compare against your previous analysis: is the trend improving or worsening?"""}])
+            Assess churn risk (low/medium/high). Compare against previous analysis."""}])
 
         analysis = resp.choices[0].message.content
         profiles[cust["id"]] = analysis
-
         if "high" in analysis.lower()[:100]:
-            at_risk.append({"name": cust["name"], "mrr": cust["mrr"], "analysis": analysis})
+            at_risk.append({"name": cust["name"], "mrr": cust["mrr"]})
 
     ctx.state["customer_profiles"] = profiles
     if at_risk:
@@ -125,9 +144,9 @@ def churn_radar(ctx):
         post_to_slack(f"{len(at_risk)} customers at risk (${total_mrr:,.0f} MRR)")
 ```
 
-### Security log analyst
+### Security log analysis
 
-Reads authentication logs, network events, and access patterns. Learns what "normal" looks like for your environment over weeks of observation, then flags anomalies that rule-based systems miss: unusual access sequences, subtle privilege escalation patterns, logins that are technically valid but contextually suspicious.
+Learns what "normal" looks like over weeks, then flags anomalies that rule-based systems miss.
 
 ```python
 @agent(schedule=every.minutes(10))
@@ -140,39 +159,27 @@ def security_analyst(ctx):
     network = fetch_network_events(minutes=10)
 
     resp = completion(model="claude-sonnet-4-20250514", messages=[{"role": "user", "content": f"""
-        You are a security analyst reviewing the last 10 minutes of activity.
-
+        Security analyst reviewing the last 10 minutes.
         Established baseline: {baseline}
-        Recent alerts you've raised: {alert_history[-10:]}
-
+        Recent alerts: {alert_history[-10:]}
         Auth logs: {auth_logs[-3000:]}
         Network events: {network[-3000:]}
-
-        Identify anything suspicious. Consider:
-        - Access patterns that are technically allowed but contextually unusual
-        - Sequences of actions that suggest lateral movement
-        - Timing anomalies (off-hours access, rapid sequential logins)
-        - Anything that deviates from the established baseline
-
-        Respond with JSON: {{"suspicious": true/false, "findings": [...], "baseline_update": "..."}}"""}])
+        Flag anything suspicious. Respond with JSON."""}])
 
     result = parse_json(resp.choices[0].message.content)
-
     if run_count % 500 == 0:
         ctx.state["baseline"] = result.get("baseline_update", baseline)
-
     if result.get("suspicious"):
         alert_history.extend(result["findings"])
-        ctx.log.error("security_alert", findings=result["findings"])
         page_oncall(result["findings"])
 
     ctx.state["alerts"] = alert_history[-200:]
     ctx.state["runs"] = run_count
 ```
 
-### Regulatory change tracker
+### Regulatory tracking
 
-Monitors government and regulatory websites for policy changes relevant to your industry. Compares new language against previous versions it has stored, identifies what changed, assesses business impact, and routes to the right compliance team.
+Monitors government websites, diffs against stored versions, routes material changes to the right team.
 
 ```python
 @agent(schedule=every.day.at("08:00"))
@@ -183,84 +190,77 @@ def regulatory_watch(ctx):
     for name, url in sources.items():
         current = fetch_page_text(url)
         prev = previous.get(name, "")
-
         if current == prev:
             continue
 
         resp = completion(model="gpt-4o", messages=[{"role": "user", "content": f"""
-            A regulatory page has changed.
-            Source: {name}
-
-            Previous version (truncated): {prev[:3000]}
-            Current version (truncated): {current[:3000]}
-
-            1. What specifically changed?
-            2. Is this a material change or cosmetic (formatting, typos)?
-            3. If material: what business functions are affected?
-            4. Recommended action and urgency (low/medium/high)."""}])
+            Regulatory page changed. Source: {name}
+            Previous: {prev[:3000]}
+            Current: {current[:3000]}
+            What changed? Material or cosmetic? Business impact? Urgency?"""}])
 
         analysis = resp.choices[0].message.content
         previous[name] = current
-
         if "cosmetic" not in analysis.lower()[:200]:
-            post_to_slack(f"Regulatory change detected: {name}\n{analysis}")
+            post_to_slack(f"Regulatory change: {name}\n{analysis}")
 
     ctx.state["previous_content"] = previous
 ```
 
 ## Agent context
 
-Every agent receives a `ctx` object:
+Every agent gets a `ctx`:
 
-- **`ctx.state`** - persistent key/value store across runs (dict-like, SQLite-backed)
-- **`ctx.log`** - structured logger
-- **`ctx.history`** - last 10 runs for this agent
-- **`ctx.agent_name`** / **`ctx.run_id`** - identity
-
-State is the key primitive. It's what turns a script into an agent: each run builds on what the previous run learned.
+| | |
+|---|---|
+| `ctx.state` | Persistent dict, SQLite-backed. Survives restarts. |
+| `ctx.log` | Structured logger (structlog) |
+| `ctx.history` | Last 10 runs for this agent |
+| `ctx.agent_name` | Agent name |
+| `ctx.run_id` | Current run ID |
 
 ## Scheduling
 
 ```python
 from watchd import every
 
-every.minutes(5)                 # every 5 minutes
-every.hour                       # every hour
-every.day.at("09:00")            # daily at 9 AM
-every.monday.at("08:00")         # weekly
-every.cron("*/5 * * * *")        # raw crontab
+every.minutes(5)              # every 5 minutes
+every.hour                    # every hour
+every.day.at("09:00")         # daily at 9 AM
+every.monday.at("08:00")      # weekly
+every.cron("*/5 * * * *")    # raw crontab
 ```
 
 ## CLI
 
-```bash
-watchd init              # scaffold project
-watchd new <name>        # create agent file
-watchd list              # show agents + schedules
-watchd run <name>        # run one now
-watchd up                # start scheduler
-watchd logs <name>       # view captured output
-watchd history           # run history
-watchd state <name>      # inspect persisted state
+```
+watchd init              scaffold project
+watchd new <name>        create agent file
+watchd list              show agents + schedules
+watchd run <name>        run one now
+watchd up                start scheduler
+watchd logs <name>       view captured output
+watchd history           run history
+watchd state <name>      inspect persisted state
 ```
 
 ## How it works
 
-1. **Scheduler** wraps APScheduler 3.x. Your agents run on their defined schedules.
-2. **Run tracker** logs every execution with status, timing, captured stdout, and errors.
-3. **State store** gives each agent persistent memory across runs.
+Three things happen at runtime:
 
-Everything lives in one SQLite file. No external services.
+1. APScheduler 3.x fires your agents on schedule
+2. Each run is logged with status, timing, stdout, and errors
+3. State is flushed to SQLite after each execution
 
-## Local development
+That's it. One file, one process.
+
+## Development
 
 ```bash
 git clone https://github.com/level09/watchd.git
 cd watchd
 uv sync
-uv run python -m pytest
-uv run watchd init
-uv run watchd run example
+uv run pytest
 ```
 
 ## License
