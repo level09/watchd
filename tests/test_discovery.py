@@ -84,3 +84,58 @@ def test_custom_dir_name(tmp_path):
 
     agents = discover_agents(agents_dir)
     assert "task" in agents
+
+
+def test_discover_directory_agent(tmp_path):
+    agents_dir = tmp_path / "watchd_agents"
+    sub = agents_dir / "analyzer"
+    sub.mkdir(parents=True)
+    (sub / "agent.py").write_text(
+        "from watchd import agent, every\n\n"
+        "@agent(schedule=every.hour)\n"
+        "def analyzer(ctx):\n"
+        "    return 'ok'\n"
+    )
+
+    agents = discover_agents(agents_dir)
+    assert "analyzer" in agents
+
+
+def test_skip_underscore_directory(tmp_path):
+    agents_dir = tmp_path / "watchd_agents"
+    sub = agents_dir / "_internal"
+    sub.mkdir(parents=True)
+    (sub / "agent.py").write_text(
+        "from watchd import agent\n\n@agent()\ndef hidden(ctx):\n    pass\n"
+    )
+
+    agents = discover_agents(agents_dir)
+    assert agents == {}
+
+
+def test_mixed_flat_and_directory(tmp_path):
+    agents_dir = tmp_path / "watchd_agents"
+    agents_dir.mkdir()
+    (agents_dir / "simple.py").write_text(
+        "from watchd import agent\n\n@agent()\ndef simple(ctx):\n    pass\n"
+    )
+    sub = agents_dir / "reporter"
+    sub.mkdir()
+    (sub / "agent.py").write_text(
+        "from watchd import agent\n\n@agent()\ndef reporter(ctx):\n    pass\n"
+    )
+
+    agents = discover_agents(agents_dir)
+    assert "simple" in agents
+    assert "reporter" in agents
+    assert len(agents) == 2
+
+
+def test_directory_without_agent_py(tmp_path):
+    agents_dir = tmp_path / "watchd_agents"
+    data = agents_dir / "data"
+    data.mkdir(parents=True)
+    (data / "notes.txt").write_text("not an agent")
+
+    agents = discover_agents(agents_dir)
+    assert agents == {}
