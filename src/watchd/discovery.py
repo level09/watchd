@@ -1,4 +1,4 @@
-"""Agent discovery from a directory of .py files."""
+"""Agent discovery from a directory of .py files and subdirectories containing agent.py."""
 
 from __future__ import annotations
 
@@ -40,5 +40,18 @@ def discover_agents(agents_dir: str | Path) -> dict[str, Agent]:
                 spec.loader.exec_module(module)
             except Exception as e:
                 log.error("agent_load_failed", file=str(py_file.name), error=str(e))
+
+    for agent_file in sorted(agents_path.glob("*/agent.py")):
+        if agent_file.parent.name.startswith("_"):
+            continue
+        module_name = f"{dir_name}.{agent_file.parent.name}.agent"
+        spec = importlib.util.spec_from_file_location(module_name, agent_file)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            try:
+                spec.loader.exec_module(module)
+            except Exception as e:
+                log.error("agent_load_failed", file=str(agent_file), error=str(e))
 
     return dict(get_registry())
