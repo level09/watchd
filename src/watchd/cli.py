@@ -296,6 +296,22 @@ def deploy(*, check: bool = False):
     run_deploy(config)
 
 
+@app.command
+def install():
+    """Install as a systemd user service on this machine."""
+    from watchd.deploy import install as run_install
+
+    run_install(load_config())
+
+
+@app.command
+def uninstall():
+    """Remove the watchd systemd user service."""
+    from watchd.deploy import uninstall as run_uninstall
+
+    run_uninstall(load_config())
+
+
 def _print_run(r):
     duration = f"{r.duration_ms:.0f}ms" if r.duration_ms else "-"
     print(f"[{r.status}] {r.agent} ({r.id}) in {duration}")

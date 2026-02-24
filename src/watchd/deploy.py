@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import time
@@ -218,6 +219,75 @@ def deploy(config):
     _prune_releases(dc.host, base, dc.keep_releases)
 
     print("Deploy complete.")
+
+
+def install(config):
+    """Install watchd as a systemd user service on the local machine."""
+    _validate_local(config)
+
+    service_name = f"watchd-{Path.cwd().name}"
+    uv_path = shutil.which("uv")
+    if not uv_path:
+        print("uv not found in PATH.", file=sys.stderr)
+        sys.exit(1)
+
+    project_path = str(Path.cwd())
+    unit = _generate_unit(service_name, project_path, uv_path)
+
+    unit_dir = Path.home() / ".config" / "systemd" / "user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    unit_file = unit_dir / f"{service_name}.service"
+    unit_file.write_text(unit)
+    print(f"Wrote {unit_file}")
+
+    subprocess.run(
+        ["systemctl", "--user", "daemon-reload"],
+        check=True,
+    )
+    subprocess.run(
+        ["systemctl", "--user", "enable", service_name],
+        check=True,
+    )
+    subprocess.run(
+        ["systemctl", "--user", "start", service_name],
+        check=True,
+    )
+
+    time.sleep(2)
+    status = subprocess.run(
+        ["systemctl", "--user", "is-active", service_name],
+        capture_output=True,
+        text=True,
+    )
+    if status.stdout.strip() == "active":
+        print(f"{service_name} is running.")
+    else:
+        print(f"Warning: {service_name} status: {status.stdout.strip()}", file=sys.stderr)
+
+
+def uninstall(config):
+    """Remove the watchd systemd user service."""
+    service_name = f"watchd-{Path.cwd().name}"
+
+    subprocess.run(
+        ["systemctl", "--user", "stop", service_name],
+        capture_output=True,
+    )
+    subprocess.run(
+        ["systemctl", "--user", "disable", service_name],
+        capture_output=True,
+    )
+
+    unit_file = Path.home() / ".config" / "systemd" / "user" / f"{service_name}.service"
+    if unit_file.exists():
+        unit_file.unlink()
+        print(f"Removed {unit_file}")
+
+    subprocess.run(
+        ["systemctl", "--user", "daemon-reload"],
+        capture_output=True,
+    )
+    print(f"{service_name} uninstalled.")
 
 
 def _prune_releases(host, base, keep):

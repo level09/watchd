@@ -11,7 +11,9 @@ from watchd.deploy import (
     _resolve_deploy_config,
     _validate_local,
     deploy,
+    install,
     preflight,
+    uninstall,
 )
 
 
@@ -310,3 +312,71 @@ def test_prune_releases_nothing_to_prune(mock_run):
     mock_run.return_value = _ok("20260222-150102\n20260222-143052\n")
     _prune_releases("u@host", "~/myapp", 5)
     assert mock_run.call_count == 1  # only ls
+
+
+# --- install / uninstall ---
+
+
+@patch("watchd.deploy.time.sleep")
+@patch("watchd.deploy.subprocess.run")
+@patch("watchd.deploy.shutil.which", return_value="/usr/local/bin/uv")
+def test_install_generates_correct_unit(mock_which, mock_run, mock_sleep, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "watchd.toml").write_text("[watchd]\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\n")
+    (tmp_path / "watchd_agents").mkdir()
+
+    mock_run.return_value = _ok("active\n")
+    install(Config())
+
+    unit_file = Path.home() / ".config" / "systemd" / "user" / f"watchd-{tmp_path.name}.service"
+    assert unit_file.exists()
+    content = unit_file.read_text()
+    assert f"WorkingDirectory={tmp_path}" in content
+    assert "ExecStart=/usr/local/bin/uv run watchd up" in content
+    assert f"Description=watchd: watchd-{tmp_path.name}" in content
+    unit_file.unlink()
+
+
+@patch("watchd.deploy.time.sleep")
+@patch("watchd.deploy.subprocess.run")
+@patch("watchd.deploy.shutil.which", return_value="/usr/local/bin/uv")
+def test_install_service_name_from_cwd(mock_which, mock_run, mock_sleep, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "watchd.toml").write_text("[watchd]\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\n")
+    (tmp_path / "watchd_agents").mkdir()
+
+    mock_run.return_value = _ok("active\n")
+    install(Config())
+
+    expected = f"watchd-{tmp_path.name}.service"
+    unit_file = Path.home() / ".config" / "systemd" / "user" / expected
+    assert unit_file.exists()
+    unit_file.unlink()
+
+
+@patch("watchd.deploy.subprocess.run")
+def test_uninstall_removes_unit_file(mock_run, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    service_name = f"watchd-{tmp_path.name}"
+    unit_dir = Path.home() / ".config" / "systemd" / "user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    unit_file = unit_dir / f"{service_name}.service"
+    unit_file.write_text("[Unit]\n")
+
+    mock_run.return_value = _ok()
+    uninstall(Config())
+
+    assert not unit_file.exists()
+
+
+@patch("watchd.deploy.shutil.which", return_value=None)
+def test_install_checks_uv_available(mock_which, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "watchd.toml").write_text("[watchd]\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\n")
+    (tmp_path / "watchd_agents").mkdir()
+
+    with pytest.raises(SystemExit):
+        install(Config())
