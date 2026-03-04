@@ -69,7 +69,7 @@ def _resolve_from_config():
             sys.exit(1)
         return None
 
-    w = Watchd(db=config.db)
+    w = Watchd(db=config.db, log_level=config.log_level, timezone=config.timezone)
     w.agents.update(agents)
     return w
 
@@ -242,13 +242,17 @@ def history(
 
 @app.command
 def logs(
-    agent_name: str,
+    agent_name: str | None = None,
     *,
     run_id: str | None = None,
     limit: int = 5,
     app_path: Annotated[str | None, cyclopts.Parameter(name="--app")] = None,
 ):
     """Show captured output from agent runs."""
+    if not run_id and not agent_name:
+        print("Provide an agent name or --run-id.", file=sys.stderr)
+        sys.exit(1)
+
     watchd = _resolve(app_path)
     watchd.store.init()
 

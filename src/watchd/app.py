@@ -16,10 +16,12 @@ log = structlog.get_logger()
 
 
 class Watchd:
-    def __init__(self, db: str = "./watchd.db"):
+    def __init__(self, db: str = "./watchd.db", log_level: str = "info", timezone: str = "UTC"):
         self.store = Store(db)
         self.agents: dict[str, Agent] = {}
         self.scheduler = None
+        self.log_level = log_level.upper()
+        self.timezone = timezone
 
     def agent(self, schedule: Schedule | None = None, name: str | None = None, retries: int = 0):
         """Decorator to register an agent."""
@@ -35,13 +37,21 @@ class Watchd:
 
     def start(self):
         """Start scheduler and block."""
+        import logging
+
         from apscheduler.schedulers.blocking import BlockingScheduler
+
+        structlog.configure(
+            wrapper_class=structlog.make_filtering_bound_logger(
+                logging.getLevelName(self.log_level)
+            ),
+        )
 
         install_capture()
         self.store.init()
         self._sync_agents()
 
-        self.scheduler = BlockingScheduler()
+        self.scheduler = BlockingScheduler(timezone=self.timezone)
 
         for agent in self.agents.values():
             if agent.schedule:
