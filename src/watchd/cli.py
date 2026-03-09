@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import importlib
+import hashlib
 import importlib.metadata
 import json
 import sys
 from pathlib import Path
-from typing import Annotated
 
 import cyclopts
 
@@ -20,8 +19,6 @@ app = cyclopts.App(
     version=importlib.metadata.version("watchd"),
 )
 
-_DEFAULT_APP_LOCATIONS = ["app:app", "main:app", "watchd_app:app"]
-
 _TOML_TEMPLATE = """\
 [watchd]
 db = "./watchd.db"
@@ -31,10 +28,10 @@ agents_dir = "watchd_agents"
 """
 
 _AGENT_TEMPLATE = """\
-from watchd import agent, every
+from watchd import agent, watch
 
 
-@agent(schedule=every.hours(1))
+@agent(every="1h")
 def {name}(ctx):
     \"\"\"TODO: describe what this agent does.\"\"\"
     ctx.log.info("running")
@@ -74,57 +71,12 @@ def _resolve_from_config():
     return w
 
 
-def _resolve_legacy(app_path: str | None):
-    """Legacy resolution: module:variable notation."""
-    from watchd.app import Watchd
-
-    candidates = [app_path] if app_path else _DEFAULT_APP_LOCATIONS
-
-    cwd = str(Path.cwd())
-    if cwd not in sys.path:
-        sys.path.insert(0, cwd)
-
-    for candidate in candidates:
-        if ":" not in candidate:
-            raise cyclopts.ValidationError(f"Expected module:variable format, got: {candidate}")
-        module_path, var_name = candidate.rsplit(":", 1)
-        try:
-            module = importlib.import_module(module_path)
-        except ImportError:
-            if app_path:
-                raise
-            continue
-        obj = getattr(module, var_name, None)
-        if isinstance(obj, Watchd):
-            return obj
-        if app_path:
-            raise cyclopts.ValidationError(
-                f"'{var_name}' in '{module_path}' is not a Watchd instance"
-            )
-    return None
-
-
-def _resolve(app_path: str | None = None):
-    """Try config+discovery first, fall back to legacy --app.
-
-    When --app is explicitly passed, skip config discovery entirely.
-    """
-    if app_path:
-        watchd = _resolve_legacy(app_path)
-        if watchd:
-            return watchd
-        raise cyclopts.ValidationError(f"Could not load app from '{app_path}'")
-
+def _resolve():
+    """Resolve agents from config + discovery."""
     watchd = _resolve_from_config()
     if watchd:
         return watchd
-    watchd = _resolve_legacy(None)
-    if watchd:
-        return watchd
-    raise cyclopts.ValidationError(
-        "No agents found. Run 'watchd init' to get started, "
-        "or use --app module:variable for an existing app."
-    )
+    raise cyclopts.ValidationError("No agents found. Run 'watchd init' to get started.")
 
 
 @app.command
@@ -174,34 +126,24 @@ def new(name: str):
 
 
 @app.command
-def up(
-    *,
-    app_path: Annotated[str | None, cyclopts.Parameter(name="--app")] = None,
-):
+def up():
     """Discover agents and start the scheduler."""
-    watchd = _resolve(app_path)
+    watchd = _resolve()
     watchd.start()
 
 
 @app.command
-def run(
-    agent_name: str,
-    *,
-    app_path: Annotated[str | None, cyclopts.Parameter(name="--app")] = None,
-):
+def run(agent_name: str):
     """Run a single agent immediately."""
-    watchd = _resolve(app_path)
+    watchd = _resolve()
     result = watchd.run(agent_name)
     _print_run(result)
 
 
 @app.command(name="list")
-def list_agents(
-    *,
-    app_path: Annotated[str | None, cyclopts.Parameter(name="--app")] = None,
-):
+def list_agents():
     """List all registered agents and their schedules."""
-    watchd = _resolve(app_path)
+    watchd = _resolve()
     if not watchd.agents:
         print("No agents registered.")
         return
@@ -213,14 +155,9 @@ def list_agents(
 
 
 @app.command
-def history(
-    agent_name: str | None = None,
-    *,
-    limit: int = 20,
-    app_path: Annotated[str | None, cyclopts.Parameter(name="--app")] = None,
-):
+def history(agent_name: str | None = None, *, limit: int = 20):
     """Show run history for an agent."""
-    watchd = _resolve(app_path)
+    watchd = _resolve()
     watchd.store.init()
 
     if agent_name:
@@ -241,19 +178,13 @@ def history(
 
 
 @app.command
-def logs(
-    agent_name: str | None = None,
-    *,
-    run_id: str | None = None,
-    limit: int = 5,
-    app_path: Annotated[str | None, cyclopts.Parameter(name="--app")] = None,
-):
+def logs(agent_name: str | None = None, *, run_id: str | None = None, limit: int = 5):
     """Show captured output from agent runs."""
     if not run_id and not agent_name:
         print("Provide an agent name or --run-id.", file=sys.stderr)
         sys.exit(1)
 
-    watchd = _resolve(app_path)
+    watchd = _resolve()
     watchd.store.init()
 
     if run_id:
@@ -273,13 +204,9 @@ def logs(
 
 
 @app.command
-def state(
-    agent_name: str,
-    *,
-    app_path: Annotated[str | None, cyclopts.Parameter(name="--app")] = None,
-):
+def state(agent_name: str):
     """Show persisted state for an agent."""
-    watchd = _resolve(app_path)
+    watchd = _resolve()
     watchd.store.init()
     data = watchd.store.get_state(agent_name)
     if not data:
@@ -288,16 +215,76 @@ def state(
     print(json.dumps(data, indent=2, default=str))
 
 
-@app.command
-def deploy(*, check: bool = False):
-    """Deploy agents to a remote server via SSH."""
-    from watchd.deploy import deploy as run_deploy, preflight
+@app.command(name="watch")
+def watch_target(
+    target: str,
+    *,
+    every: str = "5m",
+    cmd: bool = False,
+    mode: str = "full",
+    notify: str = "log",
+    once: bool = False,
+):
+    """Watch a URL, file, or command output for changes.
 
-    config = load_config()
-    if check:
-        ok = preflight(config)
-        sys.exit(0 if ok else 1)
-    run_deploy(config)
+    Examples:
+      watchd watch https://example.com --every 5m
+      watchd watch /var/log/app.log --every 30s --mode tail
+      watchd watch --cmd "df -h /" --every 1m
+      watchd watch https://example.com --once
+    """
+    from watchd import watch as w
+    from watchd.app import Watchd
+    from watchd.registry import agent as register_agent, clear_registry, get_registry
+
+    def _watch_fn(ctx):
+        if cmd:
+            return w.command(target, ctx=ctx)
+        if target.startswith(("http://", "https://")):
+            return w.url(target, ctx=ctx)
+        return w.file(target, ctx=ctx, mode=mode)
+
+    def _watcher(ctx):
+        change = _watch_fn(ctx)
+        if change is None:
+            ctx.log.info("no_change", target=target)
+            return "no change"
+        ctx.notify(f"Change detected in {target}: {change.summary}", channel=notify)
+        return change.summary
+
+    name = f"watch-{hashlib.md5(target.encode()).hexdigest()[:8]}"
+
+    db_dir = Path("~/.local/share/watchd").expanduser()
+    db_dir.mkdir(parents=True, exist_ok=True)
+    db_path = str(db_dir / "watchd.db")
+
+    watchd = Watchd(db=db_path)
+    clear_registry()
+    register_agent(every=every, name=name)(_watcher)
+    watchd.agents.update(get_registry())
+
+    if once:
+        result = watchd.run(name)
+        _print_run(result)
+    else:
+        print(f"Watching {target} every {every} (notify: {notify})")
+        watchd.start()
+
+
+@app.command
+def setup():
+    """First-time server setup: clone, install deps, create systemd service."""
+    from watchd.deploy import setup as run_setup
+
+    run_setup(load_config())
+
+
+@app.command
+def deploy():
+    """Deploy latest code to server (git pull + restart)."""
+    from watchd.deploy import deploy as run_deploy
+
+    run_deploy(load_config())
 
 
 @app.command

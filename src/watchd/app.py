@@ -9,7 +9,6 @@ import structlog
 
 from watchd.agent import Agent
 from watchd.runner import execute_agent, install_capture, uninstall_capture
-from watchd.schedule import Schedule
 from watchd.store import Store
 
 log = structlog.get_logger()
@@ -22,18 +21,6 @@ class Watchd:
         self.scheduler = None
         self.log_level = log_level.upper()
         self.timezone = timezone
-
-    def agent(self, schedule: Schedule | None = None, name: str | None = None, retries: int = 0):
-        """Decorator to register an agent."""
-
-        def decorator(fn):
-            agent_name = name or fn.__name__
-            self.agents[agent_name] = Agent(
-                name=agent_name, fn=fn, schedule=schedule, retries=retries
-            )
-            return fn
-
-        return decorator
 
     def start(self):
         """Start scheduler and block."""

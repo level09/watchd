@@ -1,3 +1,5 @@
+"""Tests for deploy and systemd service management."""
+
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -7,12 +9,10 @@ import pytest
 from watchd.config import Config, DeployConfig
 from watchd.deploy import (
     _generate_unit,
-    _prune_releases,
     _resolve_deploy_config,
-    _validate_local,
     deploy,
     install,
-    preflight,
+    setup,
     uninstall,
 )
 
@@ -43,7 +43,6 @@ def test_resolve_deploy_config_defaults():
     assert resolved.host == "u@host"
     assert resolved.path == f"~/watchd-{Path.cwd().name}"
     assert resolved.env_file == ".env"
-    assert resolved.keep_releases == 5
 
 
 def test_resolve_deploy_config_with_path():
@@ -70,248 +69,105 @@ def test_resolve_deploy_config_no_section():
 
 
 def test_generate_unit():
-    unit = _generate_unit("watchd-myproject", "/home/user/watchd-myproject/releases/123", "/home/user/.local/bin/uv")
+    unit = _generate_unit("watchd-myproject", "/home/user/myproject", "/home/user/.local/bin/uv")
     assert "Description=watchd: watchd-myproject" in unit
-    assert "WorkingDirectory=/home/user/watchd-myproject/releases/123" in unit
+    assert "WorkingDirectory=/home/user/myproject" in unit
     assert "ExecStart=/home/user/.local/bin/uv run watchd up" in unit
     assert "Restart=on-failure" in unit
     assert "WantedBy=default.target" in unit
 
 
-# --- validate_local ---
-
-
-def test_validate_local_all_present(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "watchd.toml").write_text("[watchd]\n")
-    (tmp_path / "pyproject.toml").write_text("[project]\n")
-    (tmp_path / "watchd_agents").mkdir()
-    _validate_local(Config())
-
-
-def test_validate_local_missing_toml(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "pyproject.toml").write_text("[project]\n")
-    (tmp_path / "watchd_agents").mkdir()
-    with pytest.raises(SystemExit):
-        _validate_local(Config())
-
-
-def test_validate_local_missing_pyproject(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "watchd.toml").write_text("[watchd]\n")
-    (tmp_path / "watchd_agents").mkdir()
-    with pytest.raises(SystemExit):
-        _validate_local(Config())
-
-
-def test_validate_local_missing_agents_dir(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "watchd.toml").write_text("[watchd]\n")
-    (tmp_path / "pyproject.toml").write_text("[project]\n")
-    with pytest.raises(SystemExit):
-        _validate_local(Config())
-
-
-# --- preflight ---
-
-
-@patch("watchd.deploy.subprocess.run")
-def test_preflight_all_pass(mock_run):
-    mock_run.return_value = _ok("ok\n")
-    dc = DeployConfig(host="u@host", path="~/myapp")
-    config = Config(deploy=dc)
-    assert preflight(config) is True
-
-
-@patch("watchd.deploy.subprocess.run")
-def test_preflight_ssh_fails(mock_run):
-    mock_run.return_value = _fail("Connection refused")
-    dc = DeployConfig(host="u@host", path="~/myapp")
-    config = Config(deploy=dc)
-    assert preflight(config) is False
-
-
-@patch("watchd.deploy.subprocess.run")
-def test_preflight_linger_warning(mock_run):
-    def side_effect(args, **kwargs):
-        cmd = args[-1] if args else ""
-        if "loginctl" in cmd:
-            return _ok("Linger=no")
-        return _ok("ok\n")
-
-    mock_run.side_effect = side_effect
-    dc = DeployConfig(host="u@host", path="~/myapp")
-    config = Config(deploy=dc)
-    assert preflight(config) is False
-
-
-# --- deploy flow ---
+# --- deploy ---
 
 
 @patch("watchd.deploy.time.sleep")
 @patch("watchd.deploy.subprocess.run")
-def test_deploy_flow_sequence(mock_run, mock_sleep, tmp_path, monkeypatch):
+@patch("watchd.deploy._ssh")
+def test_deploy_flow(mock_ssh, mock_run, mock_sleep, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "watchd.toml").write_text("[watchd]\n")
-    (tmp_path / "pyproject.toml").write_text("[project]\n")
-    (tmp_path / "watchd_agents").mkdir()
-
-    calls, track_run = _make_tracker()
-    mock_run.side_effect = track_run
-    dc = DeployConfig(host="u@host", path="~/myapp")
-    config = Config(deploy=dc)
-    deploy(config)
-
-    # uv sync happens before symlink swap
-    uv_sync_idx = next(i for i, c in enumerate(calls) if "uv sync" in c)
-    symlink_idx = next(i for i, c in enumerate(calls) if "current.tmp" in c and "mv" in c)
-    assert uv_sync_idx < symlink_idx
-
-    # rsync was called
-    assert any("rsync" in c for c in calls)
-
-    # systemctl restart happens after symlink
-    restart_idx = next(i for i, c in enumerate(calls) if "restart" in c)
-    assert restart_idx > symlink_idx
-
-
-def _make_tracker():
-    calls = []
-
-    def track_run(args, **kwargs):
-        cmd = " ".join(str(a) for a in args)
-        calls.append(cmd)
-        if "realpath" in cmd:
-            return _ok("/home/user/myapp/releases/123\n")
-        if "command -v uv" in cmd:
-            return _ok("/home/user/.local/bin/uv\n")
-        if "is-active" in cmd:
-            return _ok("active\n")
-        if "ls -1t" in cmd:
-            return _ok("20260222-150102\n")
-        if "&& pwd" in cmd:
-            return _ok("/home/user/myapp/shared\n")
-        return _ok()
-
-    return calls, track_run
-
-
-@patch("watchd.deploy.time.sleep")
-@patch("watchd.deploy.subprocess.run")
-def test_env_file_transferred_when_exists(mock_run, mock_sleep, tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "watchd.toml").write_text("[watchd]\n")
-    (tmp_path / "pyproject.toml").write_text("[project]\n")
-    (tmp_path / "watchd_agents").mkdir()
     (tmp_path / ".env").write_text("SECRET=abc\n")
 
-    calls, track_run = _make_tracker()
-    mock_run.side_effect = track_run
+    active_result = MagicMock()
+    active_result.stdout = "active\n"
+    mock_ssh.side_effect = [
+        None,  # git pull
+        None,  # uv sync
+        None,  # restart
+        active_result,  # is-active
+    ]
+
     dc = DeployConfig(host="u@host", path="~/myapp")
     config = Config(deploy=dc)
     deploy(config)
 
-    env_transfer = [c for c in calls if "rsync" in c and c.endswith(".env")]
-    assert len(env_transfer) >= 1
+    calls = [c.args for c in mock_ssh.call_args_list]
+    assert "git pull" in calls[0][1]
+    assert "uv sync" in calls[1][1]
+    assert "restart" in calls[2][1]
 
 
 @patch("watchd.deploy.time.sleep")
 @patch("watchd.deploy.subprocess.run")
-def test_env_file_not_transferred_when_missing(mock_run, mock_sleep, tmp_path, monkeypatch):
+@patch("watchd.deploy._ssh")
+def test_deploy_env_transferred(mock_ssh, mock_run, mock_sleep, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "watchd.toml").write_text("[watchd]\n")
-    (tmp_path / "pyproject.toml").write_text("[project]\n")
-    (tmp_path / "watchd_agents").mkdir()
+    (tmp_path / ".env").write_text("SECRET=abc\n")
 
-    calls, track_run = _make_tracker()
-    mock_run.side_effect = track_run
+    mock_ssh.return_value = MagicMock(stdout="active\n")
     dc = DeployConfig(host="u@host", path="~/myapp")
-    config = Config(deploy=dc)
-    deploy(config)
+    deploy(Config(deploy=dc))
 
-    env_transfer = [c for c in calls if "rsync" in c and c.endswith(".env")]
-    assert len(env_transfer) == 0
+    scp_calls = [c for c in mock_run.call_args_list if "scp" in str(c)]
+    assert len(scp_calls) == 1
 
 
 @patch("watchd.deploy.time.sleep")
 @patch("watchd.deploy.subprocess.run")
-def test_deploy_db_subdir_path(mock_run, mock_sleep, tmp_path, monkeypatch):
-    """db = './data/watchd.db' should mkdir data/ and symlink correctly."""
+@patch("watchd.deploy._ssh")
+def test_deploy_no_env_file(mock_ssh, mock_run, mock_sleep, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "watchd.toml").write_text("[watchd]\n")
-    (tmp_path / "pyproject.toml").write_text("[project]\n")
-    (tmp_path / "watchd_agents").mkdir()
 
-    calls, track_run = _make_tracker()
-    mock_run.side_effect = track_run
+    mock_ssh.return_value = MagicMock(stdout="active\n")
     dc = DeployConfig(host="u@host", path="~/myapp")
-    config = Config(db="./data/watchd.db", deploy=dc)
-    deploy(config)
+    deploy(Config(deploy=dc))
 
-    # Should mkdir the data/ subdir inside the release
-    mkdir_calls = [c for c in calls if "mkdir -p" in c and "/data" in c]
-    assert len(mkdir_calls) >= 1
-
-    # Symlink target should be the absolute shared path, link at data/watchd.db
-    ln_calls = [c for c in calls if "ln -sfn" in c and "shared" in c and "data/watchd.db" in c]
-    assert len(ln_calls) == 1
+    scp_calls = [c for c in mock_run.call_args_list if "scp" in str(c)]
+    assert len(scp_calls) == 0
 
 
-@patch("watchd.deploy.time.sleep")
+# --- setup ---
+
+
 @patch("watchd.deploy.subprocess.run")
-def test_deploy_rejects_absolute_db_path(mock_run, mock_sleep, tmp_path, monkeypatch):
+@patch("watchd.deploy._ssh")
+@patch("watchd.deploy._get_git_remote", return_value="git@github.com:user/repo.git")
+def test_setup_flow(mock_remote, mock_ssh, mock_run, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "watchd.toml").write_text("[watchd]\n")
-    (tmp_path / "pyproject.toml").write_text("[project]\n")
-    (tmp_path / "watchd_agents").mkdir()
+    mock_ssh.return_value = MagicMock(stdout="ok\n")
 
-    calls, track_run = _make_tracker()
-    mock_run.side_effect = track_run
     dc = DeployConfig(host="u@host", path="~/myapp")
-    config = Config(db="/absolute/path/watchd.db", deploy=dc)
-    with pytest.raises(SystemExit):
-        deploy(config)
+    setup(Config(deploy=dc))
+
+    calls = [c.args for c in mock_ssh.call_args_list]
+    assert any("echo ok" in c[1] for c in calls)
+    assert any("git clone" in c[1] for c in calls)
+    assert any("uv sync" in c[1] for c in calls)
+    assert any("watchd install" in c[1] for c in calls)
 
 
-@patch("watchd.deploy.time.sleep")
 @patch("watchd.deploy.subprocess.run")
-def test_deploy_rejects_dotdot_db_path(mock_run, mock_sleep, tmp_path, monkeypatch):
+@patch("watchd.deploy._ssh")
+@patch("watchd.deploy._get_git_remote", return_value="git@github.com:user/repo.git")
+def test_setup_transfers_env(mock_remote, mock_ssh, mock_run, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "watchd.toml").write_text("[watchd]\n")
-    (tmp_path / "pyproject.toml").write_text("[project]\n")
-    (tmp_path / "watchd_agents").mkdir()
+    (tmp_path / ".env").write_text("KEY=val\n")
+    mock_ssh.return_value = MagicMock(stdout="ok\n")
 
-    calls, track_run = _make_tracker()
-    mock_run.side_effect = track_run
     dc = DeployConfig(host="u@host", path="~/myapp")
-    config = Config(db="../escape/watchd.db", deploy=dc)
-    with pytest.raises(SystemExit):
-        deploy(config)
+    setup(Config(deploy=dc))
 
-
-# --- prune_releases ---
-
-
-@patch("watchd.deploy.subprocess.run")
-def test_prune_releases(mock_run):
-    ls_result = _ok("20260222-150102\n20260222-143052\n20260221-120000\n20260220-100000\n")
-    rm_results = [_ok(), _ok()]
-
-    results = [ls_result] + rm_results
-    mock_run.side_effect = results
-
-    _prune_releases("u@host", "~/myapp", 2)
-
-    # ls + 2 rm calls
-    assert mock_run.call_count == 3
-
-
-@patch("watchd.deploy.subprocess.run")
-def test_prune_releases_nothing_to_prune(mock_run):
-    mock_run.return_value = _ok("20260222-150102\n20260222-143052\n")
-    _prune_releases("u@host", "~/myapp", 5)
-    assert mock_run.call_count == 1  # only ls
+    scp_calls = [c for c in mock_run.call_args_list if "scp" in str(c)]
+    assert len(scp_calls) == 1
 
 
 # --- install / uninstall ---
@@ -322,9 +178,6 @@ def test_prune_releases_nothing_to_prune(mock_run):
 @patch("watchd.deploy.shutil.which", return_value="/usr/local/bin/uv")
 def test_install_generates_correct_unit(mock_which, mock_run, mock_sleep, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "watchd.toml").write_text("[watchd]\n")
-    (tmp_path / "pyproject.toml").write_text("[project]\n")
-    (tmp_path / "watchd_agents").mkdir()
 
     mock_run.return_value = _ok("active\n")
     install(Config())
@@ -334,25 +187,6 @@ def test_install_generates_correct_unit(mock_which, mock_run, mock_sleep, tmp_pa
     content = unit_file.read_text()
     assert f"WorkingDirectory={tmp_path}" in content
     assert "ExecStart=/usr/local/bin/uv run watchd up" in content
-    assert f"Description=watchd: watchd-{tmp_path.name}" in content
-    unit_file.unlink()
-
-
-@patch("watchd.deploy.time.sleep")
-@patch("watchd.deploy.subprocess.run")
-@patch("watchd.deploy.shutil.which", return_value="/usr/local/bin/uv")
-def test_install_service_name_from_cwd(mock_which, mock_run, mock_sleep, tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "watchd.toml").write_text("[watchd]\n")
-    (tmp_path / "pyproject.toml").write_text("[project]\n")
-    (tmp_path / "watchd_agents").mkdir()
-
-    mock_run.return_value = _ok("active\n")
-    install(Config())
-
-    expected = f"watchd-{tmp_path.name}.service"
-    unit_file = Path.home() / ".config" / "systemd" / "user" / expected
-    assert unit_file.exists()
     unit_file.unlink()
 
 
@@ -374,9 +208,5 @@ def test_uninstall_removes_unit_file(mock_run, tmp_path, monkeypatch):
 @patch("watchd.deploy.shutil.which", return_value=None)
 def test_install_checks_uv_available(mock_which, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "watchd.toml").write_text("[watchd]\n")
-    (tmp_path / "pyproject.toml").write_text("[project]\n")
-    (tmp_path / "watchd_agents").mkdir()
-
     with pytest.raises(SystemExit):
         install(Config())

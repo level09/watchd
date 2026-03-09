@@ -13,7 +13,6 @@ class DeployConfig:
     host: str = ""
     path: str = ""
     env_file: str = ".env"
-    keep_releases: int = 5
 
 
 @dataclass
@@ -45,7 +44,6 @@ def load_config(path: Path | None = None) -> Config:
             host=d.get("host", DeployConfig.host),
             path=d.get("path", DeployConfig.path),
             env_file=d.get("env_file", DeployConfig.env_file),
-            keep_releases=d.get("keep_releases", DeployConfig.keep_releases),
         )
     return Config(
         db=watchd.get("db", Config.db),

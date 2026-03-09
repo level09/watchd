@@ -5,44 +5,26 @@ import pytest
 
 
 @pytest.fixture
-def app_dir(tmp_path):
-    """Create a temp dir with a minimal watchd app (legacy mode)."""
-    app_file = tmp_path / "app.py"
-    app_file.write_text(
-        """
-from watchd import Watchd, every
-
-app = Watchd(db="./test.db")
-
-@app.agent(schedule=every.seconds(5))
-def hello(ctx):
-    count = ctx.state.get("count", 0) + 1
-    ctx.state["count"] = count
-    return f"count={count}"
-
-@app.agent(schedule=every.hour, name="checker")
-def check_things(ctx):
-    return "checked"
-"""
-    )
-    return tmp_path
-
-
-@pytest.fixture
 def discovery_dir(tmp_path):
-    """Create a temp dir with watchd.toml + agent files (new mode)."""
+    """Create a temp dir with watchd.toml + agent files."""
     (tmp_path / "watchd.toml").write_text(
         '[watchd]\ndb = "./test.db"\nagents_dir = "watchd_agents"\n'
     )
     agents = tmp_path / "watchd_agents"
     agents.mkdir()
     (agents / "hello.py").write_text(
-        "from watchd import agent, every\n\n"
-        "@agent(schedule=every.seconds(5))\n"
+        "from watchd import agent\n\n"
+        "@agent(every='5s')\n"
         "def hello(ctx):\n"
         "    count = ctx.state.get('count', 0) + 1\n"
         "    ctx.state['count'] = count\n"
         "    return f'count={count}'\n"
+    )
+    (agents / "checker.py").write_text(
+        "from watchd import agent\n\n"
+        "@agent(every='1h', name='checker')\n"
+        "def check_things(ctx):\n"
+        "    return 'checked'\n"
     )
     return tmp_path
 
@@ -57,41 +39,48 @@ def _run_cli(cwd, *args):
     return result
 
 
-# --- Legacy mode tests ---
+# --- Core commands ---
 
 
-def test_cli_list(app_dir):
-    r = _run_cli(app_dir, "list")
+def test_cli_list(discovery_dir):
+    r = _run_cli(discovery_dir, "list")
     assert r.returncode == 0
     assert "hello" in r.stdout
     assert "checker" in r.stdout
 
 
-def test_cli_run(app_dir):
-    r = _run_cli(app_dir, "run", "hello")
+def test_cli_run(discovery_dir):
+    r = _run_cli(discovery_dir, "run", "hello")
     assert r.returncode == 0
     assert "success" in r.stdout
     assert "count=1" in r.stdout
 
 
-def test_cli_run_twice_state_persists(app_dir):
-    _run_cli(app_dir, "run", "hello")
-    r = _run_cli(app_dir, "run", "hello")
+def test_cli_run_twice_state_persists(discovery_dir):
+    _run_cli(discovery_dir, "run", "hello")
+    r = _run_cli(discovery_dir, "run", "hello")
     assert "count=2" in r.stdout
 
 
-def test_cli_history(app_dir):
-    _run_cli(app_dir, "run", "hello")
-    r = _run_cli(app_dir, "history", "hello")
+def test_cli_history(discovery_dir):
+    _run_cli(discovery_dir, "run", "hello")
+    r = _run_cli(discovery_dir, "history", "hello")
     assert r.returncode == 0
     assert "success" in r.stdout
 
 
-def test_cli_state(app_dir):
-    _run_cli(app_dir, "run", "hello")
-    r = _run_cli(app_dir, "state", "hello")
+def test_cli_state(discovery_dir):
+    _run_cli(discovery_dir, "run", "hello")
+    r = _run_cli(discovery_dir, "state", "hello")
     assert r.returncode == 0
     assert '"count": 1' in r.stdout
+
+
+def test_cli_logs(discovery_dir):
+    _run_cli(discovery_dir, "run", "hello")
+    r = _run_cli(discovery_dir, "logs", "hello")
+    assert r.returncode == 0
+    assert "success" in r.stdout
 
 
 # --- Init / new commands ---
@@ -127,38 +116,6 @@ def test_cli_new_already_exists(tmp_path):
     assert "Already exists" in r.stdout
 
 
-# --- Discovery mode tests ---
-
-
-def test_discovery_list(discovery_dir):
-    r = _run_cli(discovery_dir, "list")
-    assert r.returncode == 0
-    assert "hello" in r.stdout
-
-
-def test_discovery_run(discovery_dir):
-    r = _run_cli(discovery_dir, "run", "hello")
-    assert r.returncode == 0
-    assert "success" in r.stdout
-    assert "count=1" in r.stdout
-
-
-def test_discovery_run_state_persists(discovery_dir):
-    _run_cli(discovery_dir, "run", "hello")
-    r = _run_cli(discovery_dir, "run", "hello")
-    assert "count=2" in r.stdout
-
-
-# --- Logs command ---
-
-
-def test_cli_logs(app_dir):
-    _run_cli(app_dir, "run", "hello")
-    r = _run_cli(app_dir, "logs", "hello")
-    assert r.returncode == 0
-    assert "success" in r.stdout
-
-
 # --- Version ---
 
 
@@ -181,3 +138,30 @@ def test_cli_missing_agents_dir_with_toml(tmp_path):
     r = _run_cli(tmp_path, "list")
     assert r.returncode != 0
     assert "not found" in r.stderr
+
+
+def test_cli_new_rejects_path_traversal(tmp_path):
+    _run_cli(tmp_path, "init")
+    r = _run_cli(tmp_path, "new", "../outside")
+    assert r.returncode != 0
+    assert "Invalid" in r.stderr
+
+
+def test_cli_new_rejects_invalid_name(tmp_path):
+    _run_cli(tmp_path, "init")
+    r = _run_cli(tmp_path, "new", "foo bar")
+    assert r.returncode != 0
+    assert "Invalid" in r.stderr
+
+
+def test_cli_new_rejects_dashes(tmp_path):
+    _run_cli(tmp_path, "init")
+    r = _run_cli(tmp_path, "new", "my-agent")
+    assert r.returncode != 0
+    assert "Invalid" in r.stderr
+
+
+def test_cli_no_agents_found(tmp_path):
+    """When no agents dir and no toml, show helpful error."""
+    r = _run_cli(tmp_path, "list")
+    assert r.returncode != 0

@@ -90,3 +90,15 @@ class AgentContext:
     @property
     def history(self) -> list[Run]:
         return self.store.get_runs(self.agent_name, limit=10)
+
+    def notify(self, message: str, *, channel: str = "log", **kwargs):
+        """Send a notification. Channels: 'log', 'slack', 'webhook'."""
+        from watchd.notify import send
+
+        send(message, channel=channel, **kwargs)
+
+    def judge(self, change, *, instruction: str, **kwargs):
+        """Ask an LLM whether a change is worth acting on. Requires anthropic or openai extra."""
+        from watchd.ext.judge import judge
+
+        return judge(change, instruction=instruction, **kwargs)
