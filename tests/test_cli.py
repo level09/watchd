@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 
@@ -52,7 +53,6 @@ def test_cli_list(discovery_dir):
 def test_cli_run(discovery_dir):
     r = _run_cli(discovery_dir, "run", "hello")
     assert r.returncode == 0
-    assert "success" in r.stdout
     assert "count=1" in r.stdout
 
 
@@ -66,7 +66,7 @@ def test_cli_history(discovery_dir):
     _run_cli(discovery_dir, "run", "hello")
     r = _run_cli(discovery_dir, "history", "hello")
     assert r.returncode == 0
-    assert "success" in r.stdout
+    assert "hello" in r.stdout
 
 
 def test_cli_state(discovery_dir):
@@ -80,7 +80,7 @@ def test_cli_logs(discovery_dir):
     _run_cli(discovery_dir, "run", "hello")
     r = _run_cli(discovery_dir, "logs", "hello")
     assert r.returncode == 0
-    assert "success" in r.stdout
+    assert "count=1" in r.stdout
 
 
 # --- Init / new commands ---
@@ -165,3 +165,60 @@ def test_cli_no_agents_found(tmp_path):
     """When no agents dir and no toml, show helpful error."""
     r = _run_cli(tmp_path, "list")
     assert r.returncode != 0
+
+
+# --- Status command ---
+
+
+def test_cli_status(discovery_dir):
+    _run_cli(discovery_dir, "run", "hello")
+    r = _run_cli(discovery_dir, "status")
+    assert r.returncode == 0
+    assert "hello" in r.stdout
+    assert "checker" in r.stdout
+
+
+def test_cli_status_single_agent(discovery_dir):
+    _run_cli(discovery_dir, "run", "hello")
+    r = _run_cli(discovery_dir, "status", "hello")
+    assert r.returncode == 0
+    assert "hello" in r.stdout
+    assert "checker" not in r.stdout
+
+
+# --- JSON output ---
+
+
+def test_cli_list_json(discovery_dir):
+    r = _run_cli(discovery_dir, "list", "--as-json")
+    assert r.returncode == 0
+    data = json.loads(r.stdout)
+    names = [a["name"] for a in data]
+    assert "hello" in names
+
+
+def test_cli_history_json(discovery_dir):
+    _run_cli(discovery_dir, "run", "hello")
+    r = _run_cli(discovery_dir, "history", "--as-json")
+    assert r.returncode == 0
+    data = json.loads(r.stdout)
+    assert len(data) >= 1
+    assert data[0]["agent"] == "hello"
+
+
+def test_cli_status_json(discovery_dir):
+    _run_cli(discovery_dir, "run", "hello")
+    r = _run_cli(discovery_dir, "status", "--as-json")
+    assert r.returncode == 0
+    data = json.loads(r.stdout)
+    names = [a["name"] for a in data]
+    assert "hello" in names
+
+
+# --- Spelling suggestions ---
+
+
+def test_cli_run_unknown_agent_suggests(discovery_dir):
+    r = _run_cli(discovery_dir, "run", "helo")
+    assert r.returncode != 0
+    assert "Did you mean" in r.stderr
