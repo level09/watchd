@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import importlib.metadata
 import json
@@ -12,6 +13,7 @@ import cyclopts
 
 from watchd.config import load_config
 from watchd.discovery import discover_agents
+from watchd.output import console, err_console, make_table, print_json, relative_time, status_icon
 
 app = cyclopts.App(
     name="watchd",
@@ -48,8 +50,8 @@ def _resolve_from_config():
     agents_dir = Path.cwd() / config.agents_dir
 
     if toml_exists and not agents_dir.is_dir():
-        print(
-            f"Agents directory '{config.agents_dir}' not found. Run 'watchd init'.", file=sys.stderr
+        err_console.print(
+            f"Agents directory '{config.agents_dir}' not found. Run [bold]watchd init[/bold]."
         )
         sys.exit(1)
 
@@ -59,9 +61,9 @@ def _resolve_from_config():
     agents = discover_agents(agents_dir)
     if not agents:
         if toml_exists:
-            print(
-                f"No agents found in '{config.agents_dir}/'. Create one with 'watchd new <name>'.",
-                file=sys.stderr,
+            err_console.print(
+                f"No agents in '{config.agents_dir}/'. "
+                "Create one with [bold]watchd new <name>[/bold]."
             )
             sys.exit(1)
         return None
@@ -79,6 +81,16 @@ def _resolve():
     raise cyclopts.ValidationError("No agents found. Run 'watchd init' to get started.")
 
 
+def _resolve_agent(watchd, agent_name: str):
+    """Resolve agent name with spelling suggestions on miss."""
+    if agent_name in watchd.agents:
+        return agent_name
+    close = difflib.get_close_matches(agent_name, watchd.agents.keys(), n=1, cutoff=0.6)
+    hint = f" Did you mean '{close[0]}'?" if close else ""
+    err_console.print(f"Unknown agent '{agent_name}'.{hint}")
+    sys.exit(1)
+
+
 @app.command
 def init():
     """Create watchd.toml and watchd_agents/ with an example agent."""
@@ -86,27 +98,27 @@ def init():
     agents_dir = Path.cwd() / "watchd_agents"
 
     if toml_path.exists():
-        print(f"Already exists: {toml_path.name}")
+        console.print(f"Already exists: {toml_path.name}")
     else:
         toml_path.write_text(_TOML_TEMPLATE)
-        print(f"Created {toml_path.name}")
+        console.print(f"[ok]Created[/ok] {toml_path.name}")
 
     agents_dir.mkdir(exist_ok=True)
     example = agents_dir / "example.py"
     if example.exists():
-        print(f"Already exists: {example.relative_to(Path.cwd())}")
+        console.print(f"Already exists: {example.relative_to(Path.cwd())}")
     else:
         example.write_text(_AGENT_TEMPLATE.format(name="example"))
-        print(f"Created {example.relative_to(Path.cwd())}")
+        console.print(f"[ok]Created[/ok] {example.relative_to(Path.cwd())}")
 
-    print("\nNext: watchd list, watchd run example, watchd up")
+    console.print("\nNext: watchd list, watchd run example, watchd up")
 
 
 @app.command
 def new(name: str):
     """Scaffold a new agent file in the agents directory."""
     if not name.isidentifier():
-        print(f"Invalid agent name: '{name}'. Must be a valid Python identifier.", file=sys.stderr)
+        err_console.print(f"Invalid agent name: '{name}'. Must be a valid Python identifier.")
         sys.exit(1)
 
     config = load_config()
@@ -115,73 +127,152 @@ def new(name: str):
 
     filepath = (agents_dir / f"{name}.py").resolve()
     if not filepath.is_relative_to(agents_dir.resolve()):
-        print(f"Invalid agent name: '{name}'.", file=sys.stderr)
+        err_console.print(f"Invalid agent name: '{name}'.")
         sys.exit(1)
 
     if filepath.exists():
-        print(f"Already exists: {filepath.relative_to(Path.cwd())}")
+        console.print(f"Already exists: {filepath.relative_to(Path.cwd())}")
         return
     filepath.write_text(_AGENT_TEMPLATE.format(name=name))
-    print(f"Created {filepath.relative_to(Path.cwd())}")
+    console.print(f"[ok]Created[/ok] {filepath.relative_to(Path.cwd())}")
 
 
 @app.command
 def up():
     """Discover agents and start the scheduler."""
     watchd = _resolve()
+    n = len(watchd.agents)
+    console.print(f"Starting scheduler with {n} agent{'s' if n != 1 else ''}...")
     watchd.start()
 
 
 @app.command
-def run(agent_name: str):
+def run(agent_name: str, *, as_json: bool = False):
     """Run a single agent immediately."""
     watchd = _resolve()
-    result = watchd.run(agent_name)
-    _print_run(result)
+    _resolve_agent(watchd, agent_name)
+    with console.status(f"Running {agent_name}..."):
+        result = watchd.run(agent_name)
+    if as_json:
+        print_json(_run_to_dict(result))
+    else:
+        _print_run(result)
 
 
 @app.command(name="list")
-def list_agents():
+def list_agents(*, as_json: bool = False):
     """List all registered agents and their schedules."""
     watchd = _resolve()
     if not watchd.agents:
-        print("No agents registered.")
+        console.print("No agents registered.")
         return
-    print(f"{'Agent':<25} {'Schedule':<30} {'Retries'}")
-    print("-" * 65)
+
+    if as_json:
+        data = [
+            {
+                "name": a.name,
+                "schedule": str(a.schedule) if a.schedule else None,
+                "retries": a.retries,
+            }
+            for a in watchd.agents.values()
+        ]
+        print_json(data)
+        return
+
+    table = make_table("Agent", "Schedule", "Retries")
     for a in watchd.agents.values():
-        schedule = str(a.schedule) if a.schedule else "manual"
-        print(f"{a.name:<25} {schedule:<30} {a.retries}")
+        schedule = str(a.schedule) if a.schedule else "[dim]manual[/dim]"
+        table.add_row(a.name, schedule, str(a.retries))
+    console.print(table)
 
 
 @app.command
-def history(agent_name: str | None = None, *, limit: int = 20):
+def status(agent_name: str | None = None, *, as_json: bool = False):
+    """Dashboard: agents with their last run status."""
+    watchd = _resolve()
+    watchd.store.init()
+
+    agents = list(watchd.agents.values())
+    if agent_name:
+        _resolve_agent(watchd, agent_name)
+        agents = [a for a in agents if a.name == agent_name]
+
+    rows = []
+    for a in agents:
+        runs = watchd.store.get_runs(a.name, limit=1)
+        last = runs[0] if runs else None
+        rows.append({"agent": a, "last_run": last})
+
+    if as_json:
+        data = []
+        for row in rows:
+            entry = {
+                "name": row["agent"].name,
+                "schedule": str(row["agent"].schedule) if row["agent"].schedule else None,
+            }
+            if row["last_run"]:
+                r = row["last_run"]
+                entry["last_run"] = _run_to_dict(r)
+            data.append(entry)
+        print_json(data)
+        return
+
+    table = make_table("", "Agent", "Schedule", "Last Run", "Duration", "When")
+    for row in rows:
+        a = row["agent"]
+        r = row["last_run"]
+        schedule = str(a.schedule) if a.schedule else "[dim]manual[/dim]"
+        if r:
+            icon = status_icon(r.status)
+            duration = f"{r.duration_ms:.0f}ms" if r.duration_ms else "-"
+            when = relative_time(r.started_at)
+        else:
+            icon = "[dim]-[/dim]"
+            duration = "-"
+            when = "[dim]never[/dim]"
+        table.add_row(icon, a.name, schedule, r.id if r else "-", duration, when)
+    console.print(table)
+
+
+@app.command
+def history(agent_name: str | None = None, *, limit: int = 20, as_json: bool = False):
     """Show run history for an agent."""
     watchd = _resolve()
     watchd.store.init()
 
     if agent_name:
+        _resolve_agent(watchd, agent_name)
         runs = watchd.store.get_runs(agent_name, limit=limit)
     else:
         runs = watchd.store.get_all_runs(limit=limit)
 
     if not runs:
-        print("No runs found.")
+        console.print("No runs found.")
         return
 
-    print(f"{'ID':<14} {'Agent':<20} {'Status':<10} {'Duration':<12} {'Started'}")
-    print("-" * 80)
+    if as_json:
+        print_json([_run_to_dict(r) for r in runs])
+        return
+
+    table = make_table("", "ID", "Agent", "Status", "Duration", "When")
     for r in runs:
         duration = f"{r.duration_ms:.0f}ms" if r.duration_ms else "-"
-        started = r.started_at.strftime("%Y-%m-%d %H:%M:%S") if r.started_at else "-"
-        print(f"{r.id:<14} {r.agent:<20} {r.status:<10} {duration:<12} {started}")
+        table.add_row(
+            status_icon(r.status),
+            r.id,
+            r.agent,
+            r.status,
+            duration,
+            relative_time(r.started_at),
+        )
+    console.print(table)
 
 
 @app.command
 def logs(agent_name: str | None = None, *, run_id: str | None = None, limit: int = 5):
     """Show captured output from agent runs."""
     if not run_id and not agent_name:
-        print("Provide an agent name or --run-id.", file=sys.stderr)
+        err_console.print("Provide an agent name or --run-id.")
         sys.exit(1)
 
     watchd = _resolve()
@@ -190,29 +281,34 @@ def logs(agent_name: str | None = None, *, run_id: str | None = None, limit: int
     if run_id:
         r = watchd.store.get_run(run_id)
         if not r:
-            print(f"Run '{run_id}' not found.")
+            err_console.print(f"Run '{run_id}' not found.")
             return
         _print_run_detail(r)
     else:
+        _resolve_agent(watchd, agent_name)
         runs = watchd.store.get_runs(agent_name, limit=limit)
         if not runs:
-            print(f"No runs found for '{agent_name}'.")
+            console.print(f"No runs found for '{agent_name}'.")
             return
         for r in runs:
             _print_run_detail(r)
-            print()
+            console.print()
 
 
 @app.command
-def state(agent_name: str):
+def state(agent_name: str, *, as_json: bool = False):
     """Show persisted state for an agent."""
     watchd = _resolve()
     watchd.store.init()
+    _resolve_agent(watchd, agent_name)
     data = watchd.store.get_state(agent_name)
     if not data:
-        print(f"No state for agent '{agent_name}'.")
+        console.print(f"No state for agent '{agent_name}'.")
         return
-    print(json.dumps(data, indent=2, default=str))
+    if as_json:
+        print_json(data)
+    else:
+        console.print(json.dumps(data, indent=2, default=str))
 
 
 @app.command(name="watch")
@@ -267,7 +363,7 @@ def watch_target(
         result = watchd.run(name)
         _print_run(result)
     else:
-        print(f"Watching {target} every {every} (notify: {notify})")
+        console.print(f"Watching [bold]{target}[/bold] every {every} (notify: {notify})")
         watchd.start()
 
 
@@ -303,25 +399,40 @@ def uninstall():
     run_uninstall(load_config())
 
 
+def _run_to_dict(r) -> dict:
+    return {
+        "id": r.id,
+        "agent": r.agent,
+        "status": r.status,
+        "result": r.result,
+        "error": r.error,
+        "duration_ms": r.duration_ms,
+        "started_at": r.started_at.isoformat() if r.started_at else None,
+        "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+    }
+
+
 def _print_run(r):
+    icon = status_icon(r.status)
     duration = f"{r.duration_ms:.0f}ms" if r.duration_ms else "-"
-    print(f"[{r.status}] {r.agent} ({r.id}) in {duration}")
+    console.print(f"{icon} {r.agent} ({r.id}) in {duration}")
     if r.result:
-        print(f"  result: {r.result[:200]}")
+        console.print(f"  result: {r.result[:200]}")
     if r.error:
-        print(f"  error: {r.error}")
+        console.print(f"  [fail]error:[/fail] {r.error}")
 
 
 def _print_run_detail(r):
+    icon = status_icon(r.status)
     duration = f"{r.duration_ms:.0f}ms" if r.duration_ms else "-"
-    started = r.started_at.strftime("%Y-%m-%d %H:%M:%S") if r.started_at else "-"
-    print(f"--- {r.id} [{r.status}] {started} ({duration}) ---")
+    when = relative_time(r.started_at)
+    console.print(f"{icon} {r.id} [{r.status}] {when} ({duration})")
     if r.result:
-        print(f"result: {r.result}")
+        console.print(f"  result: {r.result}")
     if r.output:
-        print(r.output)
+        console.print(r.output)
     if r.error:
-        print(f"error: {r.error}")
+        console.print(f"  [fail]error:[/fail] {r.error}")
 
 
 def main():

@@ -25,6 +25,7 @@ dependencies = [
     "structlog",
     "cyclopts",
     "httpx",
+    "rich>=13",
 ]
 
 [project.optional-dependencies]

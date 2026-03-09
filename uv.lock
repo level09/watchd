@@ -589,6 +589,7 @@ dependencies = [
     { name = "apscheduler" },
     { name = "cyclopts" },
     { name = "httpx" },
+    { name = "rich" },
     { name = "structlog" },
 ]
 
@@ -619,6 +620,7 @@ requires-dist = [
     { name = "httpx" },
     { name = "openai", marker = "extra == 'ai'", specifier = ">=1.50" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.50" },
+    { name = "rich", specifier = ">=13" },
     { name = "structlog" },
 ]
 provides-extras = ["ai", "anthropic", "openai"]
