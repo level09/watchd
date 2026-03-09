@@ -1,4 +1,6 @@
-from watchd.schedule import Schedule, every
+import pytest
+
+from watchd.schedule import Schedule, every, parse_schedule
 
 
 def test_every_hour():
@@ -58,3 +60,44 @@ def test_str_interval():
 
 def test_str_cron():
     assert "cron" in str(every.cron("0 * * * *"))
+
+
+# parse_schedule tests
+
+
+def test_parse_seconds():
+    assert parse_schedule("30s") == Schedule("interval", {"seconds": 30})
+
+
+def test_parse_minutes():
+    assert parse_schedule("5m") == Schedule("interval", {"minutes": 5})
+
+
+def test_parse_hours():
+    assert parse_schedule("2h") == Schedule("interval", {"hours": 2})
+
+
+def test_parse_days():
+    assert parse_schedule("1d") == Schedule("interval", {"days": 1})
+
+
+def test_parse_cron():
+    assert parse_schedule("*/5 * * * *") == Schedule("cron", {"crontab": "*/5 * * * *"})
+
+
+def test_parse_cron_daily():
+    assert parse_schedule("0 9 * * MON-FRI") == Schedule("cron", {"crontab": "0 9 * * MON-FRI"})
+
+
+def test_parse_whitespace():
+    assert parse_schedule("  5m  ") == Schedule("interval", {"minutes": 5})
+
+
+def test_parse_invalid():
+    with pytest.raises(ValueError, match="Invalid schedule"):
+        parse_schedule("5x")
+
+
+def test_parse_invalid_no_unit():
+    with pytest.raises(ValueError, match="Invalid schedule"):
+        parse_schedule("fast")

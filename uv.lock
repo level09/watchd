@@ -584,11 +584,11 @@ wheels = [
 
 [[package]]
 name = "watchd"
-version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "apscheduler" },
     { name = "cyclopts" },
+    { name = "httpx" },
     { name = "structlog" },
 ]
 
@@ -616,11 +616,12 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.40" },
     { name = "apscheduler", specifier = ">=3.10,<4" },
     { name = "cyclopts" },
+    { name = "httpx" },
     { name = "openai", marker = "extra == 'ai'", specifier = ">=1.50" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.50" },
     { name = "structlog" },
 ]
-provides-extras = ["anthropic", "openai", "ai"]
+provides-extras = ["ai", "anthropic", "openai"]
 
 [package.metadata.requires-dev]
 dev = [

@@ -1,5 +1,5 @@
 from watchd.registry import agent, clear_registry, get_registry
-from watchd.schedule import every
+from watchd.schedule import Schedule, every
 
 
 def setup_function():
@@ -56,3 +56,21 @@ def test_duplicate_name_overwrites_with_warning():
 
     reg = get_registry()
     assert reg["dup"].fn is second
+
+
+def test_every_string():
+    @agent(every="5m")
+    def fast(ctx):
+        pass
+
+    reg = get_registry()
+    assert reg["fast"].schedule == Schedule("interval", {"minutes": 5})
+
+
+def test_every_string_cron():
+    @agent(every="0 9 * * *")
+    def daily(ctx):
+        pass
+
+    reg = get_registry()
+    assert reg["daily"].schedule == Schedule("cron", {"crontab": "0 9 * * *"})

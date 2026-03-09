@@ -24,6 +24,7 @@ dependencies = [
     "apscheduler>=3.10,<4",
     "structlog",
     "cyclopts",
+    "httpx",
 ]
 
 [project.optional-dependencies]

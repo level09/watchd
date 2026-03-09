@@ -1,4 +1,4 @@
-"""SSH + systemd atomic deploys for watchd agents."""
+"""Deploy and systemd service management for watchd agents."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 from watchd.config import DeployConfig
@@ -28,16 +27,6 @@ EnvironmentFile=-{project_path}/.env
 WantedBy=default.target
 """
 
-_RSYNC_EXCLUDES = (
-    ".venv",
-    "__pycache__",
-    "*.db",
-    ".git",
-    ".env",
-    ".ruff_cache",
-    "*.pyc",
-)
-
 
 def _ssh(host, cmd, check=True):
     result = subprocess.run(
@@ -47,18 +36,6 @@ def _ssh(host, cmd, check=True):
     )
     if check and result.returncode != 0:
         raise RuntimeError(f"ssh command failed: {cmd}\n{result.stderr.strip()}")
-    return result
-
-
-def _rsync(source, host, dest):
-    args = ["rsync", "-az", "--delete"]
-    for exc in _RSYNC_EXCLUDES:
-        args += ["--exclude", exc]
-    source_str = str(source).rstrip("/") + "/"
-    args += [source_str, f"{host}:{dest}/"]
-    result = subprocess.run(args, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"rsync failed:\n{result.stderr.strip()}")
     return result
 
 
@@ -79,152 +56,101 @@ def _resolve_deploy_config(config):
             host=dc.host,
             path=f"~/watchd-{Path.cwd().name}",
             env_file=dc.env_file,
-            keep_releases=dc.keep_releases,
         )
     return dc
 
 
-def _validate_local(config):
-    errors = []
-    if not (Path.cwd() / "watchd.toml").exists():
-        errors.append("watchd.toml not found")
-    if not (Path.cwd() / "pyproject.toml").exists():
-        errors.append("pyproject.toml not found")
-    agents_dir = Path.cwd() / config.agents_dir
-    if not agents_dir.is_dir():
-        errors.append(f"agents directory '{config.agents_dir}' not found")
-    db_path = Path(config.db)
-    if db_path.is_absolute() or ".." in db_path.parts:
-        errors.append(f"db path must be relative without '..', got: {config.db}")
-    if errors:
-        for e in errors:
-            print(f"  [FAIL] {e}", file=sys.stderr)
+def _get_git_remote():
+    result = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print("No git remote 'origin' found.", file=sys.stderr)
         sys.exit(1)
+    return result.stdout.strip()
 
 
-def preflight(config):
+def setup(config):
+    """First-time server setup: clone repo, install deps, create systemd service."""
     dc = _resolve_deploy_config(config)
-    all_pass = True
+    repo = _get_git_remote()
 
-    def _check(label, fn):
-        nonlocal all_pass
-        try:
-            fn()
-            print(f"  [PASS] {label}")
-        except Exception as e:
-            print(f"  [FAIL] {label}: {e}")
-            all_pass = False
-            return False
-        return True
+    print(f"Setting up {dc.host}:{dc.path}")
 
-    print("Preflight checks:")
-    if not _check("SSH connectivity", lambda: _ssh(dc.host, "echo ok")):
-        return False
+    # Check SSH + uv
+    _ssh(dc.host, "echo ok")
+    _ssh(dc.host, "command -v uv")
 
-    _check("uv available", lambda: _ssh(dc.host, "command -v uv"))
-    _check("systemctl available", lambda: _ssh(dc.host, "command -v systemctl"))
+    # Clone
+    _ssh(dc.host, f"git clone {repo} {dc.path}")
 
-    def _check_linger():
-        r = _ssh(dc.host, "loginctl show-user $(whoami) -p Linger 2>/dev/null || echo Linger=unknown", check=False)
-        out = r.stdout.strip()
-        if "Linger=no" in out:
-            raise RuntimeError("loginctl linger not enabled, service will stop on logout. Run: loginctl enable-linger")
+    # Install deps
+    print("  Installing dependencies...")
+    _ssh(dc.host, f"cd {dc.path} && uv sync")
 
-    _check("loginctl linger", _check_linger)
-    _check("deploy path writable", lambda: _ssh(dc.host, f"mkdir -p {dc.path} && test -w {dc.path}"))
-
-    return all_pass
-
-
-def deploy(config):
-    _validate_local(config)
-    dc = _resolve_deploy_config(config)
-
-    print("Running preflight checks...")
-    if not preflight(config):
-        print("\nPreflight failed. Fix issues above and retry.", file=sys.stderr)
-        sys.exit(1)
-
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    release_dir = f"{dc.path}/releases/{ts}"
-    base = dc.path
-
-    print(f"\nDeploying to {dc.host}:{release_dir}")
-
-    # Create dirs
-    _ssh(dc.host, f"mkdir -p {release_dir} && mkdir -p {base}/shared")
-
-    # Rsync project files
-    print("  Syncing files...")
-    _rsync(Path.cwd(), dc.host, release_dir)
-
-    # Transfer .env if exists
+    # Transfer .env
     env_path = Path.cwd() / dc.env_file
     if env_path.exists():
         print("  Transferring .env...")
         subprocess.run(
-            ["rsync", "-az", str(env_path), f"{dc.host}:{release_dir}/.env"],
+            ["scp", str(env_path), f"{dc.host}:{dc.path}/.env"],
             capture_output=True,
             text=True,
             check=True,
         )
 
-    # uv sync before symlink swap (failure keeps old release live)
-    print("  Installing dependencies...")
-    _ssh(dc.host, f"cd {release_dir} && uv sync")
+    # Install systemd service on remote
+    print("  Installing service...")
+    _ssh(dc.host, f"cd {dc.path} && uv run watchd install")
 
-    # Symlink shared db at the exact path config.db expects.
-    # e.g. db="./data/watchd.db" -> mkdir data/, symlink data/watchd.db -> shared/watchd.db
-    db_rel = config.db.removeprefix("./")
-    db_name = Path(db_rel).name
-    db_parent = str(Path(db_rel).parent)
-    if db_parent != ".":
-        _ssh(dc.host, f"mkdir -p {release_dir}/{db_parent}")
-    abs_shared = _ssh(dc.host, f"cd {base}/shared && pwd").stdout.strip()
-    _ssh(dc.host, f"ln -sfn {abs_shared}/{db_name} {release_dir}/{db_rel}")
+    print("Done. Run 'watchd deploy' for future updates.")
 
-    # Atomic symlink swap
-    print("  Swapping symlink...")
-    _ssh(dc.host, f"ln -sfn releases/{ts} {base}/current.tmp && mv -Tf {base}/current.tmp {base}/current")
 
-    # Resolve paths for systemd unit
-    abs_path = _ssh(dc.host, f"realpath {base}/current").stdout.strip()
-    uv_path = _ssh(dc.host, "command -v uv").stdout.strip()
+def deploy(config):
+    """Pull latest code, sync deps, restart service."""
+    dc = _resolve_deploy_config(config)
+    service_name = f"watchd-{Path(dc.path).name}"
 
-    # Derive service name from remote path basename
-    service_base = Path(dc.path.replace("~", "")).name if "~" in dc.path else Path(dc.path).name
-    service_name = f"watchd-{service_base}"
+    print(f"Deploying to {dc.host}:{dc.path}")
 
-    # Generate and write systemd unit
-    unit = _generate_unit(service_name, abs_path, uv_path)
-    unit_path = f"~/.config/systemd/user/{service_name}.service"
-    _ssh(dc.host, "mkdir -p ~/.config/systemd/user")
-    _ssh(dc.host, f"cat > {unit_path} << 'UNIT_EOF'\n{unit}UNIT_EOF")
+    # Pull latest
+    print("  Pulling latest...")
+    _ssh(dc.host, f"cd {dc.path} && git pull")
 
-    # Reload, enable, restart
-    print("  Starting service...")
-    _ssh(dc.host, f"systemctl --user daemon-reload && systemctl --user enable {service_name} && systemctl --user restart {service_name}")
+    # Sync deps
+    print("  Syncing dependencies...")
+    _ssh(dc.host, f"cd {dc.path} && uv sync")
 
-    # Status check
+    # Transfer .env if exists locally
+    env_path = Path.cwd() / dc.env_file
+    if env_path.exists():
+        print("  Transferring .env...")
+        subprocess.run(
+            ["scp", str(env_path), f"{dc.host}:{dc.path}/.env"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    # Restart service
+    print("  Restarting service...")
+    _ssh(dc.host, f"systemctl --user restart {service_name}")
+
+    # Verify
     time.sleep(2)
     status = _ssh(dc.host, f"systemctl --user is-active {service_name}", check=False)
     if status.stdout.strip() == "active":
-        print(f"\n  {service_name} is running.")
+        print(f"  {service_name} is running.")
     else:
-        print(f"\n  Warning: {service_name} status: {status.stdout.strip()}", file=sys.stderr)
-        detail = _ssh(dc.host, f"systemctl --user status {service_name}", check=False)
-        print(detail.stdout, file=sys.stderr)
+        print(f"  Warning: {service_name} status: {status.stdout.strip()}", file=sys.stderr)
 
-    # Prune old releases
-    _prune_releases(dc.host, base, dc.keep_releases)
-
-    print("Deploy complete.")
+    print("Done.")
 
 
 def install(config):
     """Install watchd as a systemd user service on the local machine."""
-    _validate_local(config)
-
     service_name = f"watchd-{Path.cwd().name}"
     uv_path = shutil.which("uv")
     if not uv_path:
@@ -240,18 +166,9 @@ def install(config):
     unit_file.write_text(unit)
     print(f"Wrote {unit_file}")
 
-    subprocess.run(
-        ["systemctl", "--user", "daemon-reload"],
-        check=True,
-    )
-    subprocess.run(
-        ["systemctl", "--user", "enable", service_name],
-        check=True,
-    )
-    subprocess.run(
-        ["systemctl", "--user", "start", service_name],
-        check=True,
-    )
+    subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "--user", "enable", service_name], check=True)
+    subprocess.run(["systemctl", "--user", "start", service_name], check=True)
 
     time.sleep(2)
     status = subprocess.run(
@@ -269,35 +186,13 @@ def uninstall(config):
     """Remove the watchd systemd user service."""
     service_name = f"watchd-{Path.cwd().name}"
 
-    subprocess.run(
-        ["systemctl", "--user", "stop", service_name],
-        capture_output=True,
-    )
-    subprocess.run(
-        ["systemctl", "--user", "disable", service_name],
-        capture_output=True,
-    )
+    subprocess.run(["systemctl", "--user", "stop", service_name], capture_output=True)
+    subprocess.run(["systemctl", "--user", "disable", service_name], capture_output=True)
 
     unit_file = Path.home() / ".config" / "systemd" / "user" / f"{service_name}.service"
     if unit_file.exists():
         unit_file.unlink()
         print(f"Removed {unit_file}")
 
-    subprocess.run(
-        ["systemctl", "--user", "daemon-reload"],
-        capture_output=True,
-    )
+    subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
     print(f"{service_name} uninstalled.")
-
-
-def _prune_releases(host, base, keep):
-    result = _ssh(host, f"ls -1t {base}/releases/", check=False)
-    if result.returncode != 0:
-        return
-    dirs = [d for d in result.stdout.strip().split("\n") if d]
-    if len(dirs) <= keep:
-        return
-    to_remove = dirs[keep:]
-    for d in to_remove:
-        _ssh(host, f"rm -rf {base}/releases/{d}", check=False)
-    print(f"  Pruned {len(to_remove)} old release(s).")

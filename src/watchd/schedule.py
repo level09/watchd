@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 
@@ -98,3 +99,20 @@ def _parse_time(time_str: str) -> tuple[int, int]:
 
 
 every = _Every()
+
+
+def parse_schedule(spec: str) -> Schedule:
+    """Parse '30s', '5m', '2h', '1d' or a cron expression (detected by spaces)."""
+    spec = spec.strip()
+    if " " in spec:
+        return Schedule("cron", {"crontab": spec})
+
+    match = re.fullmatch(r"(\d+)([smhd])", spec)
+    if not match:
+        raise ValueError(
+            f"Invalid schedule: {spec!r}. Use '30s', '5m', '2h', '1d', or a cron expression."
+        )
+
+    n, unit = int(match.group(1)), match.group(2)
+    key = {"s": "seconds", "m": "minutes", "h": "hours", "d": "days"}[unit]
+    return Schedule("interval", {key: n})
