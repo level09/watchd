@@ -25,7 +25,6 @@ def test_init_creates_tables(store):
     names = {r["name"] for r in tables}
     assert "agents" in names
     assert "runs" in names
-    assert "agent_state" in names
 
 
 def test_sync_agent(store):
@@ -70,30 +69,6 @@ def test_update_run(store):
     assert runs[0].duration_ms == 150.0
 
 
-def test_state_get_set(store):
-    store.sync_agent("agent1")
-    store.set_state("agent1", "count", 42)
-    store.set_state("agent1", "name", "test")
-    state = store.get_state("agent1")
-    assert state["count"] == 42
-    assert state["name"] == "test"
-
-
-def test_state_overwrite(store):
-    store.sync_agent("agent1")
-    store.set_state("agent1", "count", 1)
-    store.set_state("agent1", "count", 2)
-    state = store.get_state("agent1")
-    assert state["count"] == 2
-
-
-def test_state_bulk(store):
-    store.sync_agent("agent1")
-    store.set_state_bulk("agent1", {"a": 1, "b": "hello", "c": [1, 2, 3]})
-    state = store.get_state("agent1")
-    assert state == {"a": 1, "b": "hello", "c": [1, 2, 3]}
-
-
 def test_get_run_by_id(store):
     store.sync_agent("agent1")
     now = datetime.now(timezone.utc)
@@ -113,11 +88,3 @@ def test_get_all_runs(store):
     store.save_run(Run(id="r2", agent="a2", status="error", started_at=now))
     all_runs = store.get_all_runs(limit=10)
     assert len(all_runs) == 2
-
-
-def test_delete_state_keys(store):
-    store.sync_agent("agent1")
-    store.set_state_bulk("agent1", {"a": 1, "b": 2, "c": 3})
-    store.delete_state_keys("agent1", {"a", "c"})
-    state = store.get_state("agent1")
-    assert state == {"b": 2}

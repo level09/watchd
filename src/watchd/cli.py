@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import difflib
-import hashlib
 import importlib.metadata
-import json as _json_mod
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -28,12 +26,14 @@ _TOML_TEMPLATE = """\
 [watchd]
 db = "./watchd.db"
 agents_dir = "watchd_agents"
+# model = "anthropic:claude-sonnet-4-5-20250929"
+# learning = false
 # log_level = "info"
 # timezone = "UTC"
 """
 
 _AGENT_TEMPLATE = """\
-from watchd import agent, watch
+from watchd import agent
 
 
 @agent(every="1h")
@@ -45,7 +45,6 @@ def {name}(ctx):
 
 
 def _resolve_from_config():
-    """Load config, discover agents, build a Watchd instance."""
     from watchd.app import Watchd
 
     config = load_config()
@@ -77,7 +76,6 @@ def _resolve_from_config():
 
 
 def _resolve():
-    """Resolve agents from config + discovery."""
     watchd = _resolve_from_config()
     if watchd:
         return watchd
@@ -85,7 +83,6 @@ def _resolve():
 
 
 def _resolve_agent(watchd, agent_name: str):
-    """Resolve agent name with spelling suggestions on miss."""
     if agent_name in watchd.agents:
         return agent_name
     close = difflib.get_close_matches(agent_name, watchd.agents.keys(), n=1, cutoff=0.6)
@@ -178,16 +175,20 @@ def list_agents(*, json: _json_flag = False):
                 "name": a.name,
                 "schedule": str(a.schedule) if a.schedule else None,
                 "retries": a.retries,
+                "model": a.model,
+                "learning": a.learning,
             }
             for a in watchd.agents.values()
         ]
         print_json(data)
         return
 
-    table = make_table("Agent", "Schedule", "Retries")
+    table = make_table("Agent", "Schedule", "Model", "Learning")
     for a in watchd.agents.values():
         schedule = str(a.schedule) if a.schedule else "[dim]manual[/dim]"
-        table.add_row(a.name, schedule, str(a.retries))
+        model = a.model or "[dim]default[/dim]"
+        learning = "[ok]on[/ok]" if a.learning else "[dim]off[/dim]"
+        table.add_row(a.name, schedule, model, learning)
     console.print(table)
 
 
@@ -216,8 +217,7 @@ def status(agent_name: str | None = None, *, json: _json_flag = False):
                 "schedule": str(row["agent"].schedule) if row["agent"].schedule else None,
             }
             if row["last_run"]:
-                r = row["last_run"]
-                entry["last_run"] = _run_to_dict(r)
+                entry["last_run"] = _run_to_dict(row["last_run"])
             data.append(entry)
         print_json(data)
         return
@@ -301,88 +301,30 @@ def logs(agent_name: str | None = None, *, run_id: str | None = None, limit: int
 
 
 @app.command
-def state(agent_name: str, *, json: _json_flag = False):
-    """Show persisted state for an agent."""
+def memory(agent_name: str):
+    """Show learned memories for an agent (requires learning=True)."""
     watchd = _resolve()
-    watchd.store.init()
     _resolve_agent(watchd, agent_name)
-    data = watchd.store.get_state(agent_name)
-    if not data:
-        console.print(f"No state for agent '{agent_name}'.")
+
+    entry = watchd.agents[agent_name]
+    if not entry.learning:
+        console.print(f"Agent '{agent_name}' has learning disabled.")
         return
-    if json:
-        print_json(data)
-    else:
-        console.print(_json_mod.dumps(data, indent=2, default=str))
 
+    try:
+        from agno.agent import Agent
+        from agno.db.sqlite import SqliteDb
 
-@app.command(name="watch")
-def watch_target(
-    target: str,
-    *,
-    every: str = "5m",
-    cmd: bool = False,
-    mode: str = "full",
-    notify: str = "log",
-    judge: str | None = None,
-    once: bool = False,
-):
-    """Watch a URL, file, or command output for changes.
-
-    Examples:
-      watchd watch https://example.com --every 5m
-      watchd watch /var/log/app.log --every 30s --mode tail
-      watchd watch --cmd "df -h /" --every 1m
-      watchd watch https://example.com --once
-      watchd watch https://example.com --judge "flag security issues"
-    """
-    from watchd import watch as w
-    from watchd.app import Watchd
-    from watchd.registry import agent as register_agent, clear_registry, get_registry
-
-    def _watch_fn(ctx):
-        if cmd:
-            return w.command(target, ctx=ctx)
-        if target.startswith(("http://", "https://")):
-            return w.url(target, ctx=ctx)
-        return w.file(target, ctx=ctx, mode=mode)
-
-    def _watcher(ctx):
-        change = _watch_fn(ctx)
-        if change is None:
-            ctx.log.info("no_change", target=target)
-            return "no change"
-        if judge:
-            verdict = ctx.judge(change, instruction=judge)
-            if not verdict.should_act:
-                ctx.log.info("judge_skip", summary=verdict.summary)
-                return f"skipped: {verdict.summary}"
-            message = f"{target}: {verdict.summary}"
-        else:
-            message = f"Change detected in {target}: {change.summary}"
-        ctx.notify(message, channel=notify)
-        return verdict.summary if judge else change.summary
-
-    name = f"watch-{hashlib.md5(target.encode()).hexdigest()[:8]}"
-
-    db_dir = Path("~/.local/share/watchd").expanduser()
-    db_dir.mkdir(parents=True, exist_ok=True)
-    db_path = str(db_dir / "watchd.db")
-
-    watchd = Watchd(db=db_path)
-    clear_registry()
-    register_agent(every=every, name=name)(_watcher)
-    watchd.agents.update(get_registry())
-
-    if once:
-        result = watchd.run(name)
-        _print_run(result)
-    else:
-        label = f"Watching [bold]{target}[/bold] every {every} (notify: {notify})"
-        if judge:
-            label += f" [dim]judge: {judge[:60]}[/dim]"
-        console.print(label)
-        watchd.start()
+        db = SqliteDb(db_file=watchd._db_path)
+        agno_agent = Agent(name=agent_name, db=db, learning=True)
+        memories = agno_agent.get_user_memories(user_id=agent_name)
+        if not memories:
+            console.print(f"No memories stored for '{agent_name}' yet.")
+            return
+        for m in memories:
+            console.print(f"  [dim]-[/dim] {m}")
+    except Exception as e:
+        console.print(f"Could not read memories: {e}")
 
 
 @app.command
@@ -427,18 +369,26 @@ def doctor(*, json: _json_flag = False):
     def check(name, ok, detail=""):
         checks.append({"name": name, "ok": ok, "detail": detail})
 
-    # Python version
     v = sys.version_info
     check("Python", v >= (3, 11), f"{v.major}.{v.minor}.{v.micro}")
 
-    # watchd version
     try:
         ver = importlib.metadata.version("watchd")
         check("watchd", True, ver)
     except importlib.metadata.PackageNotFoundError:
         check("watchd", False, "not installed as package")
 
-    # Config file
+    # Agno
+    agno_found = importlib.util.find_spec("agno") is not None
+    if agno_found:
+        try:
+            agno_ver = importlib.metadata.version("agno")
+            check("agno", True, agno_ver)
+        except importlib.metadata.PackageNotFoundError:
+            check("agno", True, "installed")
+    else:
+        check("agno", False, "not installed (required)")
+
     toml_path = Path.cwd() / "watchd.toml"
     if toml_path.exists():
         try:
@@ -451,7 +401,6 @@ def doctor(*, json: _json_flag = False):
         check("Config", True, "no watchd.toml (using defaults)")
         config = load_config()
 
-    # Agents directory
     if config:
         agents_dir = Path.cwd() / config.agents_dir
         if agents_dir.is_dir():
@@ -462,11 +411,9 @@ def doctor(*, json: _json_flag = False):
             ]
             check("Agents dir", True, f"{len(py_files)} file(s) in {config.agents_dir}/")
 
-            # Agent discovery
             agents = discover_agents(agents_dir)
             if agents:
                 check("Discovery", True, f"{len(agents)} agent(s) loaded")
-                # Schedule validation
                 bad = []
                 for a in agents.values():
                     if a.schedule:
@@ -483,7 +430,6 @@ def doctor(*, json: _json_flag = False):
         else:
             check("Agents dir", False, f"{config.agents_dir}/ not found")
 
-        # Database
         db_path = Path(config.db)
         if db_path.exists():
             try:
@@ -499,7 +445,6 @@ def doctor(*, json: _json_flag = False):
             parent = db_path.parent.resolve()
             check("Database", parent.is_dir(), f"{config.db} (will be created)")
 
-    # Optional deps
     for pkg in ("anthropic", "openai"):
         found = importlib.util.find_spec(pkg) is not None
         check(f"  {pkg}", found, "installed" if found else "not installed (optional)")
@@ -555,7 +500,6 @@ def _print_run_detail(r):
 
 
 def _load_dotenv():
-    """Load .env from cwd if it exists. No dependency needed."""
     env_path = Path.cwd() / ".env"
     if not env_path.is_file():
         return

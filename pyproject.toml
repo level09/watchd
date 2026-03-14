@@ -1,6 +1,6 @@
 [project]
 name = "watchd"
-dynamic = ["version"]
+version = "2.0.0"
 description = "Schedule, run, and track AI agents with zero infra."
 readme = "README.md"
 license = "MIT"
@@ -21,17 +21,17 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "agno>=2.5",
     "apscheduler>=3.10,<4",
     "structlog",
     "cyclopts",
-    "httpx",
     "rich>=13",
+    "sqlalchemy",
 ]
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.50"]
-ai = ["anthropic>=0.40", "openai>=1.50"]
 
 [project.urls]
 Homepage = "https://watchd.dev"
@@ -43,8 +43,8 @@ Issues = "https://github.com/level09/watchd/issues"
 watchd = "watchd.cli:main"
 
 [build-system]
-requires = ["flit_core>=3.9,<4"]
-build-backend = "flit_core.buildapi"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [tool.ruff]
 line-length = 100

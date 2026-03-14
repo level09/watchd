@@ -7,7 +7,6 @@ import pytest
 
 @pytest.fixture
 def discovery_dir(tmp_path):
-    """Create a temp dir with watchd.toml + agent files."""
     (tmp_path / "watchd.toml").write_text(
         '[watchd]\ndb = "./test.db"\nagents_dir = "watchd_agents"\n'
     )
@@ -17,9 +16,7 @@ def discovery_dir(tmp_path):
         "from watchd import agent\n\n"
         "@agent(every='5s')\n"
         "def hello(ctx):\n"
-        "    count = ctx.state.get('count', 0) + 1\n"
-        "    ctx.state['count'] = count\n"
-        "    return f'count={count}'\n"
+        "    return 'hello world'\n"
     )
     (agents / "checker.py").write_text(
         "from watchd import agent\n\n"
@@ -53,13 +50,7 @@ def test_cli_list(discovery_dir):
 def test_cli_run(discovery_dir):
     r = _run_cli(discovery_dir, "run", "hello")
     assert r.returncode == 0
-    assert "count=1" in r.stdout
-
-
-def test_cli_run_twice_state_persists(discovery_dir):
-    _run_cli(discovery_dir, "run", "hello")
-    r = _run_cli(discovery_dir, "run", "hello")
-    assert "count=2" in r.stdout
+    assert "hello world" in r.stdout
 
 
 def test_cli_history(discovery_dir):
@@ -69,18 +60,11 @@ def test_cli_history(discovery_dir):
     assert "hello" in r.stdout
 
 
-def test_cli_state(discovery_dir):
-    _run_cli(discovery_dir, "run", "hello")
-    r = _run_cli(discovery_dir, "state", "hello")
-    assert r.returncode == 0
-    assert '"count": 1' in r.stdout
-
-
 def test_cli_logs(discovery_dir):
     _run_cli(discovery_dir, "run", "hello")
     r = _run_cli(discovery_dir, "logs", "hello")
     assert r.returncode == 0
-    assert "count=1" in r.stdout
+    assert "hello world" in r.stdout
 
 
 # --- Init / new commands ---
@@ -126,14 +110,13 @@ def test_cli_version():
         text=True,
     )
     assert r.returncode == 0
-    assert "0.1.0" in r.stdout
+    assert "2.0.0" in r.stdout
 
 
 # --- Error cases ---
 
 
 def test_cli_missing_agents_dir_with_toml(tmp_path):
-    """When watchd.toml exists but agents_dir doesn't, show helpful error."""
     (tmp_path / "watchd.toml").write_text('[watchd]\nagents_dir = "missing_dir"\n')
     r = _run_cli(tmp_path, "list")
     assert r.returncode != 0
@@ -162,7 +145,6 @@ def test_cli_new_rejects_dashes(tmp_path):
 
 
 def test_cli_no_agents_found(tmp_path):
-    """When no agents dir and no toml, show helpful error."""
     r = _run_cli(tmp_path, "list")
     assert r.returncode != 0
 

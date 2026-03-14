@@ -1,4 +1,4 @@
-"""Watchd - main entry point. Agent registration, scheduler lifecycle, storage init."""
+"""Watchd orchestrator. APScheduler + Agno agents."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import sys
 
 import structlog
 
-from watchd.agent import Agent
+from watchd.registry import AgentEntry
 from watchd.runner import execute_agent, install_capture, uninstall_capture
 from watchd.store import Store
 
@@ -17,10 +17,20 @@ log = structlog.get_logger()
 class Watchd:
     def __init__(self, db: str = "./watchd.db", log_level: str = "info", timezone: str = "UTC"):
         self.store = Store(db)
-        self.agents: dict[str, Agent] = {}
+        self.agents: dict[str, AgentEntry] = {}
         self.scheduler = None
         self.log_level = log_level.upper()
         self.timezone = timezone
+        self._agno_db = None
+        self._db_path = db
+
+    @property
+    def agno_db(self):
+        if self._agno_db is None:
+            from agno.db.sqlite import SqliteDb
+
+            self._agno_db = SqliteDb(db_file=self._db_path)
+        return self._agno_db
 
     def start(self):
         """Start scheduler and block."""
@@ -40,17 +50,17 @@ class Watchd:
 
         self.scheduler = BlockingScheduler(timezone=self.timezone)
 
-        for agent in self.agents.values():
-            if agent.schedule:
-                trigger = agent.schedule.to_apscheduler_trigger()
+        for entry in self.agents.values():
+            if entry.schedule:
+                trigger = entry.schedule.to_apscheduler_trigger()
                 self.scheduler.add_job(
                     self._execute,
                     trigger=trigger,
-                    args=[agent.name],
-                    id=agent.name,
+                    args=[entry.name],
+                    id=entry.name,
                     replace_existing=True,
                 )
-                log.info("agent_scheduled", agent=agent.name, schedule=str(agent.schedule))
+                log.info("agent_scheduled", agent=entry.name, schedule=str(entry.schedule))
 
         def _shutdown(signum, frame):
             log.info("shutting_down")
@@ -77,12 +87,12 @@ class Watchd:
             uninstall_capture()
 
     def _execute(self, agent_name: str):
-        agent = self.agents.get(agent_name)
-        if agent is None:
+        entry = self.agents.get(agent_name)
+        if entry is None:
             raise KeyError(f"Agent '{agent_name}' not found")
-        return execute_agent(agent, self.store)
+        return execute_agent(entry, self.store, self.agno_db)
 
     def _sync_agents(self):
-        for agent in self.agents.values():
-            schedule_str = str(agent.schedule) if agent.schedule else None
-            self.store.sync_agent(agent.name, schedule_str, agent.retries)
+        for entry in self.agents.values():
+            schedule_str = str(entry.schedule) if entry.schedule else None
+            self.store.sync_agent(entry.name, schedule_str, entry.retries)
