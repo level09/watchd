@@ -301,30 +301,59 @@ def logs(agent_name: str | None = None, *, run_id: str | None = None, limit: int
 
 
 @app.command
-def memory(agent_name: str):
-    """Show learned memories for an agent (requires learning=True)."""
+def memory(agent_name: str, *, json: _json_flag = False):
+    """Show learned memories for an agent."""
+    import json as json_mod
+    import sqlite3
+
     watchd = _resolve()
     _resolve_agent(watchd, agent_name)
 
-    entry = watchd.agents[agent_name]
-    if not entry.learning:
-        console.print(f"Agent '{agent_name}' has learning disabled.")
+    try:
+        conn = sqlite3.connect(watchd._db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT learning_type, content FROM agno_learnings WHERE user_id=? ORDER BY created_at",
+            (agent_name,),
+        ).fetchall()
+        conn.close()
+    except sqlite3.OperationalError:
+        console.print(
+            f"No memories for '{agent_name}' yet. Run the agent first with learning=True."
+        )
         return
 
-    try:
-        from agno.agent import Agent
-        from agno.db.sqlite import SqliteDb
+    if not rows:
+        console.print(f"No memories for '{agent_name}' yet.")
+        return
 
-        db = SqliteDb(db_file=watchd._db_path)
-        agno_agent = Agent(name=agent_name, db=db, learning=True)
-        memories = agno_agent.get_user_memories(user_id=agent_name)
-        if not memories:
-            console.print(f"No memories stored for '{agent_name}' yet.")
-            return
-        for m in memories:
-            console.print(f"  [dim]-[/dim] {m}")
-    except Exception as e:
-        console.print(f"Could not read memories: {e}")
+    if json:
+        data = []
+        for r in rows:
+            data.append({"type": r["learning_type"], "content": json_mod.loads(r["content"])})
+        print_json(data)
+        return
+
+    for r in rows:
+        content = json_mod.loads(r["content"])
+        label = r["learning_type"]
+
+        if label == "user_profile":
+            console.print("  [info]profile[/info]")
+            for k, v in content.items():
+                if v and k not in ("user_id", "agent_id", "team_id", "created_at", "updated_at"):
+                    console.print(f"    {k}: {v}")
+
+        elif label == "user_memory":
+            memories = content.get("memories", [])
+            if memories:
+                console.print("  [info]memories[/info]")
+                for m in memories:
+                    console.print(f"    [dim]-[/dim] {m.get('content', m)}")
+
+        else:
+            console.print(f"  [info]{label}[/info]")
+            console.print(f"    {json_mod.dumps(content, indent=2, default=str)}")
 
 
 @app.command
