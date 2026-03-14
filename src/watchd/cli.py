@@ -324,6 +324,7 @@ def watch_target(
     cmd: bool = False,
     mode: str = "full",
     notify: str = "log",
+    judge: str | None = None,
     once: bool = False,
 ):
     """Watch a URL, file, or command output for changes.
@@ -333,6 +334,7 @@ def watch_target(
       watchd watch /var/log/app.log --every 30s --mode tail
       watchd watch --cmd "df -h /" --every 1m
       watchd watch https://example.com --once
+      watchd watch https://example.com --judge "flag security issues"
     """
     from watchd import watch as w
     from watchd.app import Watchd
@@ -350,8 +352,16 @@ def watch_target(
         if change is None:
             ctx.log.info("no_change", target=target)
             return "no change"
-        ctx.notify(f"Change detected in {target}: {change.summary}", channel=notify)
-        return change.summary
+        if judge:
+            verdict = ctx.judge(change, instruction=judge)
+            if not verdict.should_act:
+                ctx.log.info("judge_skip", summary=verdict.summary)
+                return f"skipped: {verdict.summary}"
+            message = f"{target}: {verdict.summary}"
+        else:
+            message = f"Change detected in {target}: {change.summary}"
+        ctx.notify(message, channel=notify)
+        return verdict.summary if judge else change.summary
 
     name = f"watch-{hashlib.md5(target.encode()).hexdigest()[:8]}"
 
@@ -368,7 +378,10 @@ def watch_target(
         result = watchd.run(name)
         _print_run(result)
     else:
-        console.print(f"Watching [bold]{target}[/bold] every {every} (notify: {notify})")
+        label = f"Watching [bold]{target}[/bold] every {every} (notify: {notify})"
+        if judge:
+            label += f" [dim]judge: {judge[:60]}[/dim]"
+        console.print(label)
         watchd.start()
 
 

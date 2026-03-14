@@ -3,11 +3,13 @@ def call(*, prompt, system="", model="claude-sonnet-4-20250514", max_tokens=4096
     from anthropic import Anthropic
 
     client = Anthropic()
-    msg = client.messages.create(
+    kwargs_full = dict(
         model=model,
-        system=system or None,
         messages=[{"role": "user", "content": prompt}],
         max_tokens=max_tokens,
         **kwargs,
     )
+    if system:
+        kwargs_full["system"] = [{"type": "text", "text": system}]
+    msg = client.messages.create(**kwargs_full)
     return msg.content[0].text

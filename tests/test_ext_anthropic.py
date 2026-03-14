@@ -45,7 +45,7 @@ def test_call_passes_kwargs():
     kwargs = mock_mod.Anthropic.return_value.messages.create.call_args.kwargs
     assert kwargs["model"] == "claude-opus-4-20250514"
     assert kwargs["max_tokens"] == 1024
-    assert kwargs["system"] == "Be helpful"
+    assert kwargs["system"] == [{"type": "text", "text": "Be helpful"}]
     assert kwargs["temperature"] == 0.5
 
 
@@ -58,7 +58,7 @@ def test_call_no_system():
         importlib.reload(mod)
         mod.call(prompt="Hi")
     kwargs = mock_mod.Anthropic.return_value.messages.create.call_args.kwargs
-    assert kwargs["system"] is None
+    assert "system" not in kwargs
 
 
 def test_import_error():
