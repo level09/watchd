@@ -163,7 +163,7 @@ def execute_agent(entry: AgentEntry, store: Store, agno_db=None) -> Run:
             prompt = entry.fn()
             if prompt and (entry.model or entry.tools or entry.instructions):
                 agno_agent = _build_agno_agent(entry, agno_db)
-                response = agno_agent.run(str(prompt))
+                response = agno_agent.run(str(prompt), user_id=entry.name)
                 run.result = str(response.content) if response.content else None
             else:
                 run.result = str(prompt) if prompt is not None else None
