@@ -554,7 +554,26 @@ def _print_run_detail(r):
         console.print(f"  [fail]error:[/fail] {r.error}")
 
 
+def _load_dotenv():
+    """Load .env from cwd if it exists. No dependency needed."""
+    env_path = Path.cwd() / ".env"
+    if not env_path.is_file():
+        return
+    import os
+
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("'\"")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 def main():
+    _load_dotenv()
     try:
         app()
     except KeyboardInterrupt:
