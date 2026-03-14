@@ -1,8 +1,8 @@
-from watchd import agent
+"""Example agent. Full control mode."""
+
+schedule = "1h"
 
 
-@agent(every="1h")
-def example(ctx):
-    """Example agent. Replace with your own logic."""
-    ctx.log.info("running")
+def run():
+    print("running example agent")
     return "ok"

@@ -12,17 +12,9 @@ def discovery_dir(tmp_path):
     )
     agents = tmp_path / "watchd_agents"
     agents.mkdir()
-    (agents / "hello.py").write_text(
-        "from watchd import agent\n\n"
-        "@agent(every='5s')\n"
-        "def hello(ctx):\n"
-        "    return 'hello world'\n"
-    )
+    (agents / "hello.py").write_text("schedule = '5s'\n\ndef run():\n    return 'hello world'\n")
     (agents / "checker.py").write_text(
-        "from watchd import agent\n\n"
-        "@agent(every='1h', name='checker')\n"
-        "def check_things(ctx):\n"
-        "    return 'checked'\n"
+        "name = 'checker'\nschedule = '1h'\n\ndef run():\n    return 'checked'\n"
     )
     return tmp_path
 
@@ -91,6 +83,14 @@ def test_cli_new(tmp_path):
     assert r.returncode == 0
     assert (tmp_path / "watchd_agents" / "fetcher.py").exists()
     assert "Created" in r.stdout
+
+
+def test_cli_new_full_mode(tmp_path):
+    _run_cli(tmp_path, "init")
+    r = _run_cli(tmp_path, "new", "worker", "--full")
+    assert r.returncode == 0
+    content = (tmp_path / "watchd_agents" / "worker.py").read_text()
+    assert "def run():" in content
 
 
 def test_cli_new_already_exists(tmp_path):

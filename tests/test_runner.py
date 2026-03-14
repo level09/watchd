@@ -3,7 +3,7 @@ import tempfile
 
 import pytest
 
-from watchd.registry import AgentEntry
+from watchd.discovery import AgentEntry
 from watchd.runner import execute_agent
 from watchd.store import Store
 
@@ -19,41 +19,23 @@ def store():
     os.unlink(path)
 
 
-def test_execute_success_full_mode(store):
-    """Full mode: function takes ctx, returns a value."""
+def test_execute_full_control(store):
     store.sync_agent("test")
 
-    def my_fn(ctx):
-        return "hello"
-
-    entry = AgentEntry(name="test", fn=my_fn, schedule=None)
+    entry = AgentEntry(name="test", schedule=None, run_fn=lambda: "hello")
     run = execute_agent(entry, store)
     assert run.status == "success"
     assert run.result == "hello"
-    assert run.duration_ms is not None
     assert run.duration_ms >= 0
-
-
-def test_execute_success_simple_mode(store):
-    """Simple mode: no-arg function returns a prompt string (no model configured)."""
-    store.sync_agent("test")
-
-    def my_fn():
-        return "analyze this"
-
-    entry = AgentEntry(name="test", fn=my_fn, schedule=None)
-    run = execute_agent(entry, store)
-    assert run.status == "success"
-    assert run.result == "analyze this"
 
 
 def test_execute_error(store):
     store.sync_agent("test")
 
-    def failing_fn(ctx):
+    def failing():
         raise ValueError("boom")
 
-    entry = AgentEntry(name="test", fn=failing_fn, schedule=None)
+    entry = AgentEntry(name="test", schedule=None, run_fn=failing)
     run = execute_agent(entry, store)
     assert run.status == "error"
     assert "boom" in run.error
@@ -62,10 +44,10 @@ def test_execute_error(store):
 def test_execute_baseexception_still_updates_run(store):
     store.sync_agent("test")
 
-    def interrupted_fn(ctx):
+    def interrupted():
         raise KeyboardInterrupt()
 
-    entry = AgentEntry(name="test", fn=interrupted_fn, schedule=None)
+    entry = AgentEntry(name="test", schedule=None, run_fn=interrupted)
     with pytest.raises(KeyboardInterrupt):
         execute_agent(entry, store)
 
@@ -77,7 +59,7 @@ def test_execute_baseexception_still_updates_run(store):
 
 def test_run_persisted_to_db(store):
     store.sync_agent("test")
-    entry = AgentEntry(name="test", fn=lambda ctx: "ok", schedule=None)
+    entry = AgentEntry(name="test", schedule=None, run_fn=lambda: "ok")
     execute_agent(entry, store)
     runs = store.get_runs("test")
     assert len(runs) == 1
@@ -87,11 +69,11 @@ def test_run_persisted_to_db(store):
 def test_stdout_captured(store):
     store.sync_agent("test")
 
-    def chatty_fn(ctx):
+    def chatty():
         print("hello from agent")
         return "done"
 
-    entry = AgentEntry(name="test", fn=chatty_fn, schedule=None)
+    entry = AgentEntry(name="test", schedule=None, run_fn=chatty)
     run = execute_agent(entry, store)
     assert run.status == "success"
     assert "hello from agent" in run.output
@@ -99,6 +81,18 @@ def test_stdout_captured(store):
 
 def test_no_output_is_none(store):
     store.sync_agent("test")
-    entry = AgentEntry(name="test", fn=lambda ctx: "quiet", schedule=None)
+    entry = AgentEntry(name="test", schedule=None, run_fn=lambda: "quiet")
     run = execute_agent(entry, store)
     assert run.output is None
+
+
+def test_result_with_content_attribute(store):
+    """If run_fn returns object with .content, use that."""
+    store.sync_agent("test")
+
+    class FakeResponse:
+        content = "from agno"
+
+    entry = AgentEntry(name="test", schedule=None, run_fn=lambda: FakeResponse())
+    run = execute_agent(entry, store)
+    assert run.result == "from agno"
