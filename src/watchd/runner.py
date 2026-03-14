@@ -1,33 +1,21 @@
-"""Execution engine. Builds Agno agents from registry entries, runs them, tracks runs."""
+"""Execution engine. Runs discovered agents, tracks runs."""
 
 from __future__ import annotations
 
-import inspect
 import io
 import sys
 import threading
 import traceback
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
 
 import structlog
 
-from watchd.registry import AgentEntry
+from watchd.discovery import AgentEntry
 from watchd.store import Run, Store
 
 _local = threading.local()
 _original_stdout = None
-
-
-@dataclass
-class AgentContext:
-    """Passed to full-mode agent functions."""
-
-    agent_name: str
-    run_id: str
-    db: object  # agno SqliteDb instance
-    log: object
 
 
 class _ThreadSafeStream:
@@ -65,73 +53,7 @@ def uninstall_capture():
         _original_stdout = None
 
 
-def _build_agno_agent(entry: AgentEntry, db):
-    """Build an Agno Agent from registry metadata."""
-    from agno.agent import Agent
-
-    model = None
-    if entry.model:
-        model = _resolve_model(entry.model)
-
-    kwargs = {
-        "name": entry.name,
-        "tools": entry.tools or [],
-        "instructions": entry.instructions or [],
-        "markdown": False,
-        "retries": entry.retries,
-    }
-
-    if model:
-        kwargs["model"] = model
-
-    if entry.output_schema:
-        kwargs["output_schema"] = entry.output_schema
-
-    if db:
-        kwargs["db"] = db
-
-    if entry.learning:
-        kwargs["learning"] = True
-
-    if entry.description:
-        kwargs["description"] = entry.description
-
-    return Agent(**kwargs)
-
-
-def _resolve_model(model_str: str):
-    """Resolve 'provider:model_id' string to an Agno model instance."""
-    if ":" not in model_str:
-        # Default to anthropic
-        from agno.models.anthropic import Claude
-
-        return Claude(id=model_str)
-
-    provider, model_id = model_str.split(":", 1)
-
-    if provider == "anthropic":
-        from agno.models.anthropic import Claude
-
-        return Claude(id=model_id)
-    elif provider == "openai":
-        from agno.models.openai import OpenAIChat
-
-        return OpenAIChat(id=model_id)
-    elif provider == "google":
-        from agno.models.google import Gemini
-
-        return Gemini(id=model_id)
-    else:
-        raise ValueError(f"Unknown model provider: {provider}")
-
-
-def _is_full_mode(fn) -> bool:
-    """Check if the function expects a ctx argument (full mode) vs simple mode."""
-    sig = inspect.signature(fn)
-    return len(sig.parameters) > 0
-
-
-def execute_agent(entry: AgentEntry, store: Store, agno_db=None) -> Run:
+def execute_agent(entry: AgentEntry, store: Store) -> Run:
     install_capture()
 
     run_id = uuid4().hex[:12]
@@ -145,28 +67,21 @@ def execute_agent(entry: AgentEntry, store: Store, agno_db=None) -> Run:
     _local.buf = buf
 
     try:
-        if _is_full_mode(entry.fn):
-            # Full mode: user builds their own Agno agent
-            ctx = AgentContext(
-                agent_name=entry.name,
-                run_id=run_id,
-                db=agno_db,
-                log=log,
+        if entry.is_declarative:
+            # Declarative: agent + prompt defined at module level
+            response = entry.agno_agent.run(
+                entry.prompt,
+                session_id=entry.name,
+                user_id=entry.name,
             )
-            result = entry.fn(ctx)
+            run.result = str(response.content) if response.content else None
+        else:
+            # Full control: user-defined run() function
+            result = entry.run_fn()
             if hasattr(result, "content"):
                 run.result = str(result.content)
             else:
                 run.result = str(result) if result is not None else None
-        else:
-            # Simple mode: function returns a prompt, we build the Agno agent
-            prompt = entry.fn()
-            if prompt and (entry.model or entry.tools or entry.instructions):
-                agno_agent = _build_agno_agent(entry, agno_db)
-                response = agno_agent.run(str(prompt), user_id=entry.name)
-                run.result = str(response.content) if response.content else None
-            else:
-                run.result = str(prompt) if prompt is not None else None
 
         run.status = "success"
 

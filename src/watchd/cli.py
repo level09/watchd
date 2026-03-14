@@ -26,21 +26,51 @@ _TOML_TEMPLATE = """\
 [watchd]
 db = "./watchd.db"
 agents_dir = "watchd_agents"
-# model = "anthropic:claude-sonnet-4-5-20250929"
-# learning = false
 # log_level = "info"
 # timezone = "UTC"
 """
 
-_AGENT_TEMPLATE = """\
-from watchd import agent
+_AGENT_DECLARATIVE = """\
+\"\"\"
+{name} agent.
+
+Declarative mode: define agent + prompt, watchd handles the rest.
+\"\"\"
+
+from agno.agent import Agent
+from agno.models.anthropic import Claude
+
+agent = Agent(
+    model=Claude(id="claude-sonnet-4-5-20250929"),
+    instructions=["TODO: what should this agent do?"],
+    # tools=[],
+    # learning=True,
+)
+
+schedule = "1h"
+prompt = "TODO: what should this agent analyze?"
+"""
+
+_AGENT_FULL = """\
+\"\"\"
+{name} agent.
+
+Full control mode: define run() to do whatever you want.
+\"\"\"
+
+schedule = "1h"
 
 
-@agent(every="1h")
-def {name}(ctx):
-    \"\"\"TODO: describe what this agent does.\"\"\"
-    ctx.log.info("running")
-    return "ok"
+def run():
+    from agno.agent import Agent
+    from agno.models.anthropic import Claude
+
+    agent = Agent(
+        model=Claude(id="claude-sonnet-4-5-20250929"),
+        instructions=["TODO: what should this agent do?"],
+    )
+    response = agent.run("TODO: your prompt here")
+    return response.content
 """
 
 
@@ -108,15 +138,18 @@ def init():
     if example.exists():
         console.print(f"Already exists: {example.relative_to(Path.cwd())}")
     else:
-        example.write_text(_AGENT_TEMPLATE.format(name="example"))
+        example.write_text(_AGENT_DECLARATIVE.format(name="example"))
         console.print(f"[ok]Created[/ok] {example.relative_to(Path.cwd())}")
 
     console.print("\nNext: watchd list, watchd run example, watchd up")
 
 
 @app.command
-def new(name: str):
-    """Scaffold a new agent file in the agents directory."""
+def new(name: str, *, full: bool = False):
+    """Scaffold a new agent file.
+
+    --full: full control mode (run function instead of declarative)
+    """
     if not name.isidentifier():
         err_console.print(f"Invalid agent name: '{name}'. Must be a valid Python identifier.")
         sys.exit(1)
@@ -133,7 +166,9 @@ def new(name: str):
     if filepath.exists():
         console.print(f"Already exists: {filepath.relative_to(Path.cwd())}")
         return
-    filepath.write_text(_AGENT_TEMPLATE.format(name=name))
+
+    template = _AGENT_FULL if full else _AGENT_DECLARATIVE
+    filepath.write_text(template.format(name=name))
     console.print(f"[ok]Created[/ok] {filepath.relative_to(Path.cwd())}")
 
 
@@ -163,32 +198,26 @@ def run(agent_name: str, *, json: _json_flag = False):
 
 @app.command(name="list")
 def list_agents(*, json: _json_flag = False):
-    """List all registered agents and their schedules."""
+    """List all discovered agents."""
     watchd = _resolve()
-    if not watchd.agents:
-        console.print("No agents registered.")
-        return
 
     if json:
         data = [
             {
                 "name": a.name,
                 "schedule": str(a.schedule) if a.schedule else None,
-                "retries": a.retries,
-                "model": a.model,
-                "learning": a.learning,
+                "mode": "declarative" if a.is_declarative else "full",
             }
             for a in watchd.agents.values()
         ]
         print_json(data)
         return
 
-    table = make_table("Agent", "Schedule", "Model", "Learning")
+    table = make_table("Agent", "Schedule", "Mode")
     for a in watchd.agents.values():
         schedule = str(a.schedule) if a.schedule else "[dim]manual[/dim]"
-        model = a.model or "[dim]default[/dim]"
-        learning = "[ok]on[/ok]" if a.learning else "[dim]off[/dim]"
-        table.add_row(a.name, schedule, model, learning)
+        mode = "declarative" if a.is_declarative else "full"
+        table.add_row(a.name, schedule, mode)
     console.print(table)
 
 
@@ -241,7 +270,7 @@ def status(agent_name: str | None = None, *, json: _json_flag = False):
 
 @app.command
 def history(agent_name: str | None = None, *, limit: int = 20, json: _json_flag = False):
-    """Show run history for an agent."""
+    """Show run history."""
     watchd = _resolve()
     watchd.store.init()
 
@@ -301,62 +330,6 @@ def logs(agent_name: str | None = None, *, run_id: str | None = None, limit: int
 
 
 @app.command
-def memory(agent_name: str, *, json: _json_flag = False):
-    """Show learned memories for an agent."""
-    import json as json_mod
-    import sqlite3
-
-    watchd = _resolve()
-    _resolve_agent(watchd, agent_name)
-
-    try:
-        conn = sqlite3.connect(watchd._db_path)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT learning_type, content FROM agno_learnings WHERE user_id=? ORDER BY created_at",
-            (agent_name,),
-        ).fetchall()
-        conn.close()
-    except sqlite3.OperationalError:
-        console.print(
-            f"No memories for '{agent_name}' yet. Run the agent first with learning=True."
-        )
-        return
-
-    if not rows:
-        console.print(f"No memories for '{agent_name}' yet.")
-        return
-
-    if json:
-        data = []
-        for r in rows:
-            data.append({"type": r["learning_type"], "content": json_mod.loads(r["content"])})
-        print_json(data)
-        return
-
-    for r in rows:
-        content = json_mod.loads(r["content"])
-        label = r["learning_type"]
-
-        if label == "user_profile":
-            console.print("  [info]profile[/info]")
-            for k, v in content.items():
-                if v and k not in ("user_id", "agent_id", "team_id", "created_at", "updated_at"):
-                    console.print(f"    {k}: {v}")
-
-        elif label == "user_memory":
-            memories = content.get("memories", [])
-            if memories:
-                console.print("  [info]memories[/info]")
-                for m in memories:
-                    console.print(f"    [dim]-[/dim] {m.get('content', m)}")
-
-        else:
-            console.print(f"  [info]{label}[/info]")
-            console.print(f"    {json_mod.dumps(content, indent=2, default=str)}")
-
-
-@app.command
 def setup():
     """First-time server setup: clone, install deps, create systemd service."""
     from watchd.deploy import setup as run_setup
@@ -407,7 +380,6 @@ def doctor(*, json: _json_flag = False):
     except importlib.metadata.PackageNotFoundError:
         check("watchd", False, "not installed as package")
 
-    # Agno
     agno_found = importlib.util.find_spec("agno") is not None
     if agno_found:
         try:
@@ -433,50 +405,13 @@ def doctor(*, json: _json_flag = False):
     if config:
         agents_dir = Path.cwd() / config.agents_dir
         if agents_dir.is_dir():
-            py_files = list(agents_dir.glob("*.py")) + [
-                p / "agent.py"
-                for p in agents_dir.iterdir()
-                if p.is_dir() and not p.name.startswith("_") and (p / "agent.py").exists()
-            ]
-            check("Agents dir", True, f"{len(py_files)} file(s) in {config.agents_dir}/")
-
             agents = discover_agents(agents_dir)
             if agents:
-                check("Discovery", True, f"{len(agents)} agent(s) loaded")
-                bad = []
-                for a in agents.values():
-                    if a.schedule:
-                        try:
-                            a.schedule.to_apscheduler_trigger()
-                        except Exception as e:
-                            bad.append(f"{a.name}: {e}")
-                if bad:
-                    check("Schedules", False, "; ".join(bad))
-                else:
-                    check("Schedules", True, "all valid")
+                check("Agents", True, f"{len(agents)} agent(s) discovered")
             else:
-                check("Discovery", False, f"no agents found in {config.agents_dir}/")
+                check("Agents", False, f"no agents found in {config.agents_dir}/")
         else:
-            check("Agents dir", False, f"{config.agents_dir}/ not found")
-
-        db_path = Path(config.db)
-        if db_path.exists():
-            try:
-                from watchd.store import Store
-
-                store = Store(config.db)
-                store.init()
-                store.conn.execute("SELECT 1")
-                check("Database", True, config.db)
-            except Exception as e:
-                check("Database", False, str(e))
-        else:
-            parent = db_path.parent.resolve()
-            check("Database", parent.is_dir(), f"{config.db} (will be created)")
-
-    for pkg in ("anthropic", "openai"):
-        found = importlib.util.find_spec(pkg) is not None
-        check(f"  {pkg}", found, "installed" if found else "not installed (optional)")
+            check("Agents", False, f"{config.agents_dir}/ not found")
 
     if json:
         print_json(checks)

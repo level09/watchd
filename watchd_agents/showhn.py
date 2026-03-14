@@ -1,50 +1,24 @@
-"""Scan Show HN for AI leverage ideas using Agno HackerNews tools."""
+"""Scan Show HN for AI leverage ideas. Writes analysis to Notion."""
 
+import os
 from datetime import datetime, timezone
-from pathlib import Path
 
-from watchd import agent
+import httpx
+from agno.agent import Agent
+from agno.models.anthropic import Claude
+from agno.tools.hackernews import HackerNewsTools
 
+NOTION_PAGE_ID = "323f846b-2957-8143-9fc6-f72e02af44d2"
 
-@agent(
-    every="4h",
-    name="showhn",
-    model="anthropic:claude-sonnet-4-5-20250929",
+agent = Agent(
+    model=Claude(id="claude-sonnet-4-5-20250929"),
+    tools=[HackerNewsTools()],
     instructions=[
-        "You scan Show HN for interesting AI projects.",
-        "For each project, extract the hidden mechanism, a mental model, and one AI leverage angle.",
-        "Be brutally concise. No fluff.",
+        "You scan Show HN for interesting projects.",
+        "For each project, extract: MECHANISM, MENTAL MODEL, AI LEVERAGE, NON-OBVIOUS PARALLEL.",
+        "Be brutally concise. No fluff. Skip boring ones.",
     ],
-    learning=True,
 )
-def showhn(ctx):
-    """Scan Show HN, xray interesting projects for AI leverage ideas."""
-    from agno.agent import Agent
-    from agno.models.anthropic import Claude
-    from agno.tools.hackernews import HackerNewsTools
 
-    a = Agent(
-        model=Claude(id="claude-sonnet-4-5-20250929"),
-        tools=[HackerNewsTools()],
-        learning=True,
-        db=ctx.db,
-        instructions=[
-            "You scan Show HN for interesting AI projects.",
-            "For each project, extract the hidden mechanism, a mental model, and one AI leverage angle.",
-            "Be brutally concise. No fluff.",
-        ],
-    )
-    response = a.run(
-        "Get the top 10 Show HN stories. For each, extract the mechanism, mental model, and AI leverage opportunity.",
-        user_id="showhn",
-    )
-
-    # Write result to file
-    out_dir = Path("output")
-    out_dir.mkdir(exist_ok=True)
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M")
-    out_file = out_dir / f"showhn_{ts}.md"
-    out_file.write_text(response.content)
-    ctx.log.info("wrote_output", file=str(out_file))
-
-    return response.content
+schedule = "4h"
+prompt = "Get the top 15 Show HN stories. Skip boring ones. For each interesting one, give the 4-part xray."

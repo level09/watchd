@@ -1,4 +1,4 @@
-"""Watchd orchestrator. APScheduler + Agno agents."""
+"""Watchd orchestrator. APScheduler + convention-discovered agents."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import sys
 
 import structlog
 
-from watchd.registry import AgentEntry
+from watchd.discovery import AgentEntry
 from watchd.runner import execute_agent, install_capture, uninstall_capture
 from watchd.store import Store
 
@@ -21,16 +21,6 @@ class Watchd:
         self.scheduler = None
         self.log_level = log_level.upper()
         self.timezone = timezone
-        self._agno_db = None
-        self._db_path = db
-
-    @property
-    def agno_db(self):
-        if self._agno_db is None:
-            from agno.db.sqlite import SqliteDb
-
-            self._agno_db = SqliteDb(db_file=self._db_path)
-        return self._agno_db
 
     def start(self):
         """Start scheduler and block."""
@@ -90,9 +80,9 @@ class Watchd:
         entry = self.agents.get(agent_name)
         if entry is None:
             raise KeyError(f"Agent '{agent_name}' not found")
-        return execute_agent(entry, self.store, self.agno_db)
+        return execute_agent(entry, self.store)
 
     def _sync_agents(self):
         for entry in self.agents.values():
             schedule_str = str(entry.schedule) if entry.schedule else None
-            self.store.sync_agent(entry.name, schedule_str, entry.retries)
+            self.store.sync_agent(entry.name, schedule_str)

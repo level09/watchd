@@ -21,8 +21,6 @@ class Config:
     agents_dir: str = "watchd_agents"
     log_level: str = "info"
     timezone: str = "UTC"
-    model: str = "anthropic:claude-sonnet-4-5-20250929"
-    learning: bool = False
     deploy: DeployConfig | None = None
 
 
@@ -51,7 +49,5 @@ def load_config(path: Path | None = None) -> Config:
         agents_dir=watchd.get("agents_dir", Config.agents_dir),
         log_level=watchd.get("log_level", Config.log_level),
         timezone=watchd.get("timezone", Config.timezone),
-        model=watchd.get("model", Config.model),
-        learning=watchd.get("learning", Config.learning),
         deploy=deploy,
     )
