@@ -47,7 +47,6 @@ def test_empty_dir(tmp_path):
 
 
 def test_syntax_error_skipped(tmp_path):
-    """Agent files with syntax errors are skipped, not fatal."""
     agents_dir = tmp_path / "watchd_agents"
     agents_dir.mkdir()
     (agents_dir / "bad.py").write_text("def broken(\n")
@@ -61,7 +60,6 @@ def test_syntax_error_skipped(tmp_path):
 
 
 def test_import_error_skipped(tmp_path):
-    """Agent files with import errors are skipped."""
     agents_dir = tmp_path / "watchd_agents"
     agents_dir.mkdir()
     (agents_dir / "broken.py").write_text("import nonexistent_package_xyz\n")
@@ -75,7 +73,6 @@ def test_import_error_skipped(tmp_path):
 
 
 def test_custom_dir_name(tmp_path):
-    """Module prefix should match directory name, not be hardcoded."""
     agents_dir = tmp_path / "my_agents"
     agents_dir.mkdir()
     (agents_dir / "task.py").write_text(

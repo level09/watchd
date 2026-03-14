@@ -1,8 +1,7 @@
-"""SQLite storage layer. Zero ORM, raw sqlite3 + dataclasses."""
+"""SQLite storage layer for run history. Zero ORM, raw sqlite3 + dataclasses."""
 
 from __future__ import annotations
 
-import json
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -31,14 +30,6 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_agent ON runs(agent, started_at DESC);
-
-CREATE TABLE IF NOT EXISTS agent_state (
-    agent TEXT NOT NULL REFERENCES agents(name),
-    key TEXT NOT NULL,
-    value TEXT,
-    updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    PRIMARY KEY (agent, key)
-);
 """
 
 
@@ -135,40 +126,6 @@ class Store:
             "SELECT * FROM runs ORDER BY started_at DESC LIMIT ?", (limit,)
         ).fetchall()
         return [_row_to_run(r) for r in rows]
-
-    def get_state(self, agent_name: str) -> dict[str, object]:
-        rows = self.conn.execute(
-            "SELECT key, value FROM agent_state WHERE agent=?", (agent_name,)
-        ).fetchall()
-        return {r["key"]: json.loads(r["value"]) for r in rows}
-
-    def set_state(self, agent_name: str, key: str, value: object):
-        self.conn.execute(
-            """INSERT INTO agent_state (agent, key, value) VALUES (?, ?, ?)
-               ON CONFLICT(agent, key) DO UPDATE SET
-                 value = excluded.value,
-                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
-            (agent_name, key, json.dumps(value)),
-        )
-        self.conn.commit()
-
-    def set_state_bulk(self, agent_name: str, data: dict[str, object]):
-        with self.conn:
-            for key, value in data.items():
-                self.conn.execute(
-                    """INSERT INTO agent_state (agent, key, value) VALUES (?, ?, ?)
-                       ON CONFLICT(agent, key) DO UPDATE SET
-                         value = excluded.value,
-                         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')""",
-                    (agent_name, key, json.dumps(value)),
-                )
-
-    def delete_state_keys(self, agent_name: str, keys: set[str]):
-        with self.conn:
-            for key in keys:
-                self.conn.execute(
-                    "DELETE FROM agent_state WHERE agent=? AND key=?", (agent_name, key)
-                )
 
     def get_all_agents(self) -> list[dict]:
         rows = self.conn.execute("SELECT * FROM agents ORDER BY name").fetchall()

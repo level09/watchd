@@ -74,3 +74,38 @@ def test_every_string_cron():
 
     reg = get_registry()
     assert reg["daily"].schedule == Schedule("cron", {"crontab": "0 9 * * *"})
+
+
+def test_agno_params():
+    @agent(
+        every="1h",
+        model="anthropic:claude-sonnet-4-5-20250929",
+        instructions=["Do stuff", "Be smart"],
+        learning=True,
+    )
+    def smart(ctx):
+        pass
+
+    entry = get_registry()["smart"]
+    assert entry.model == "anthropic:claude-sonnet-4-5-20250929"
+    assert entry.instructions == ["Do stuff", "Be smart"]
+    assert entry.learning is True
+
+
+def test_instructions_string_to_list():
+    @agent(instructions="Single instruction")
+    def single(ctx):
+        pass
+
+    entry = get_registry()["single"]
+    assert entry.instructions == ["Single instruction"]
+
+
+def test_description_from_docstring():
+    @agent()
+    def documented(ctx):
+        """This agent does cool things."""
+        pass
+
+    entry = get_registry()["documented"]
+    assert entry.description == "This agent does cool things."

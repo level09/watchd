@@ -8,20 +8,18 @@ from pathlib import Path
 
 import structlog
 
-from watchd.agent import Agent
-from watchd.registry import clear_registry, get_registry
+from watchd.registry import AgentEntry, clear_registry, get_registry
 
 log = structlog.get_logger()
 
 
-def discover_agents(agents_dir: str | Path) -> dict[str, Agent]:
+def discover_agents(agents_dir: str | Path) -> dict[str, AgentEntry]:
     """Scan agents_dir for .py files, import them, return registered agents."""
     clear_registry()
     agents_path = Path(agents_dir)
     if not agents_path.is_dir():
         return {}
 
-    # Ensure parent is importable
     parent = str(agents_path.parent)
     if parent not in sys.path:
         sys.path.insert(0, parent)
