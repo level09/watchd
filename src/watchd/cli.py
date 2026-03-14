@@ -5,15 +5,18 @@ from __future__ import annotations
 import difflib
 import hashlib
 import importlib.metadata
-import json
+import json as _json_mod
 import sys
 from pathlib import Path
+from typing import Annotated
 
 import cyclopts
 
 from watchd.config import load_config
 from watchd.discovery import discover_agents
 from watchd.output import console, err_console, make_table, print_json, relative_time, status_icon
+
+_json_flag = Annotated[bool, cyclopts.Parameter(name=["--json", "--as-json"])]
 
 app = cyclopts.App(
     name="watchd",
@@ -147,27 +150,29 @@ def up():
 
 
 @app.command
-def run(agent_name: str, *, as_json: bool = False):
+def run(agent_name: str, *, json: _json_flag = False):
     """Run a single agent immediately."""
     watchd = _resolve()
     _resolve_agent(watchd, agent_name)
     with console.status(f"Running {agent_name}..."):
         result = watchd.run(agent_name)
-    if as_json:
+    if json:
         print_json(_run_to_dict(result))
     else:
         _print_run(result)
+    if result.status == "error":
+        sys.exit(1)
 
 
 @app.command(name="list")
-def list_agents(*, as_json: bool = False):
+def list_agents(*, json: _json_flag = False):
     """List all registered agents and their schedules."""
     watchd = _resolve()
     if not watchd.agents:
         console.print("No agents registered.")
         return
 
-    if as_json:
+    if json:
         data = [
             {
                 "name": a.name,
@@ -187,7 +192,7 @@ def list_agents(*, as_json: bool = False):
 
 
 @app.command
-def status(agent_name: str | None = None, *, as_json: bool = False):
+def status(agent_name: str | None = None, *, json: _json_flag = False):
     """Dashboard: agents with their last run status."""
     watchd = _resolve()
     watchd.store.init()
@@ -203,7 +208,7 @@ def status(agent_name: str | None = None, *, as_json: bool = False):
         last = runs[0] if runs else None
         rows.append({"agent": a, "last_run": last})
 
-    if as_json:
+    if json:
         data = []
         for row in rows:
             entry = {
@@ -235,7 +240,7 @@ def status(agent_name: str | None = None, *, as_json: bool = False):
 
 
 @app.command
-def history(agent_name: str | None = None, *, limit: int = 20, as_json: bool = False):
+def history(agent_name: str | None = None, *, limit: int = 20, json: _json_flag = False):
     """Show run history for an agent."""
     watchd = _resolve()
     watchd.store.init()
@@ -250,7 +255,7 @@ def history(agent_name: str | None = None, *, limit: int = 20, as_json: bool = F
         console.print("No runs found.")
         return
 
-    if as_json:
+    if json:
         print_json([_run_to_dict(r) for r in runs])
         return
 
@@ -296,7 +301,7 @@ def logs(agent_name: str | None = None, *, run_id: str | None = None, limit: int
 
 
 @app.command
-def state(agent_name: str, *, as_json: bool = False):
+def state(agent_name: str, *, json: _json_flag = False):
     """Show persisted state for an agent."""
     watchd = _resolve()
     watchd.store.init()
@@ -305,10 +310,10 @@ def state(agent_name: str, *, as_json: bool = False):
     if not data:
         console.print(f"No state for agent '{agent_name}'.")
         return
-    if as_json:
+    if json:
         print_json(data)
     else:
-        console.print(json.dumps(data, indent=2, default=str))
+        console.print(_json_mod.dumps(data, indent=2, default=str))
 
 
 @app.command(name="watch")
@@ -399,6 +404,107 @@ def uninstall():
     run_uninstall(load_config())
 
 
+@app.command
+def doctor(*, json: _json_flag = False):
+    """Check your watchd setup for problems."""
+    import importlib.util
+
+    checks = []
+
+    def check(name, ok, detail=""):
+        checks.append({"name": name, "ok": ok, "detail": detail})
+
+    # Python version
+    v = sys.version_info
+    check("Python", v >= (3, 11), f"{v.major}.{v.minor}.{v.micro}")
+
+    # watchd version
+    try:
+        ver = importlib.metadata.version("watchd")
+        check("watchd", True, ver)
+    except importlib.metadata.PackageNotFoundError:
+        check("watchd", False, "not installed as package")
+
+    # Config file
+    toml_path = Path.cwd() / "watchd.toml"
+    if toml_path.exists():
+        try:
+            config = load_config()
+            check("Config", True, str(toml_path.name))
+        except SystemExit:
+            check("Config", False, "invalid TOML")
+            config = None
+    else:
+        check("Config", True, "no watchd.toml (using defaults)")
+        config = load_config()
+
+    # Agents directory
+    if config:
+        agents_dir = Path.cwd() / config.agents_dir
+        if agents_dir.is_dir():
+            py_files = list(agents_dir.glob("*.py")) + [
+                p / "agent.py"
+                for p in agents_dir.iterdir()
+                if p.is_dir() and not p.name.startswith("_") and (p / "agent.py").exists()
+            ]
+            check("Agents dir", True, f"{len(py_files)} file(s) in {config.agents_dir}/")
+
+            # Agent discovery
+            agents = discover_agents(agents_dir)
+            if agents:
+                check("Discovery", True, f"{len(agents)} agent(s) loaded")
+                # Schedule validation
+                bad = []
+                for a in agents.values():
+                    if a.schedule:
+                        try:
+                            a.schedule.to_apscheduler_trigger()
+                        except Exception as e:
+                            bad.append(f"{a.name}: {e}")
+                if bad:
+                    check("Schedules", False, "; ".join(bad))
+                else:
+                    check("Schedules", True, "all valid")
+            else:
+                check("Discovery", False, f"no agents found in {config.agents_dir}/")
+        else:
+            check("Agents dir", False, f"{config.agents_dir}/ not found")
+
+        # Database
+        db_path = Path(config.db)
+        if db_path.exists():
+            try:
+                from watchd.store import Store
+
+                store = Store(config.db)
+                store.init()
+                store.conn.execute("SELECT 1")
+                check("Database", True, config.db)
+            except Exception as e:
+                check("Database", False, str(e))
+        else:
+            parent = db_path.parent.resolve()
+            check("Database", parent.is_dir(), f"{config.db} (will be created)")
+
+    # Optional deps
+    for pkg in ("anthropic", "openai"):
+        found = importlib.util.find_spec(pkg) is not None
+        check(f"  {pkg}", found, "installed" if found else "not installed (optional)")
+
+    if json:
+        print_json(checks)
+        return
+
+    for c in checks:
+        icon = "[ok]✓[/ok]" if c["ok"] else "[fail]✗[/fail]"
+        detail = f"  [dim]{c['detail']}[/dim]" if c["detail"] else ""
+        console.print(f"  {icon} {c['name']}{detail}")
+
+    failed = [c for c in checks if not c["ok"] and not c["name"].startswith("  ")]
+    if failed:
+        sys.exit(1)
+
+
 def _run_to_dict(r) -> dict:
     return {
         "id": r.id,
@@ -436,7 +542,10 @@ def _print_run_detail(r):
 
 
 def main():
-    app()
+    try:
+        app()
+    except KeyboardInterrupt:
+        sys.exit(130)
 
 
 if __name__ == "__main__":
