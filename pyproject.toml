@@ -21,17 +21,13 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "agno>=2.5",
     "apscheduler>=3.10,<4",
     "structlog",
     "cyclopts",
     "rich>=13",
-    "sqlalchemy",
+    "anthropic>=0.40",
+    "httpx",
 ]
-
-[project.optional-dependencies]
-anthropic = ["anthropic>=0.40"]
-openai = ["openai>=1.50"]
 
 [project.urls]
 Homepage = "https://watchd.dev"
