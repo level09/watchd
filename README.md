@@ -1,6 +1,6 @@
 # watchd
 
-Schedule Claude Code agents. Single binary, zero config.
+Schedule AI agents. Single binary, zero config.
 
 Agents are markdown files. watchd runs `claude -p` on schedule, tracks runs, monitors cost.
 

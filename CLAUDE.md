@@ -2,7 +2,7 @@
 
 ## What is watchd?
 
-A Go CLI that schedules and runs Claude Code agents. Agents are markdown files. watchd runs `claude -p` on schedule, tracks runs, and monitors cost.
+A Go CLI that schedules and runs AI agents. Agents are markdown files. watchd runs `claude -p` on schedule, tracks runs, and monitors cost.
 
 ## Commands
 
