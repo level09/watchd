@@ -32,14 +32,21 @@ func Run(a *agent.Agent, s *store.Store) (*store.Run, error) {
 		args = append(args, "--max-turns", fmt.Sprintf("%d", a.MaxTurns))
 	}
 
-	if len(a.Tools) > 0 {
-		for _, tool := range a.Tools {
-			args = append(args, "--allowedTools", tool)
-		}
+	// Restrict tools to minimize cost. If agent specifies tools, use those.
+	// Otherwise default to a minimal set to avoid loading all MCP servers.
+	tools := a.Tools
+	if len(tools) == 0 {
+		tools = []string{"Bash", "Read", "Write", "Glob", "Grep", "WebSearch", "WebFetch"}
+	}
+	for _, tool := range tools {
+		args = append(args, "--allowedTools", tool)
 	}
 
 	if a.MCPConfig != "" {
-		args = append(args, "--mcp-config", a.MCPConfig)
+		args = append(args, "--mcp-config", a.MCPConfig, "--strict-mcp-config")
+	} else {
+		// No MCP config = don't load any MCP servers (saves ~$0.05/run)
+		args = append(args, "--strict-mcp-config")
 	}
 
 	start := time.Now()
