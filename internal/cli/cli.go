@@ -276,7 +276,7 @@ func cmdStatus() error {
 }
 
 func printHelp() {
-	help := `watchd v` + version + ` - schedule claude code agents
+	help := `watchd v` + version + ` - schedule AI agents
 
 usage: watchd <command> [args]
 
