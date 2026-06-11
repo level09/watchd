@@ -44,6 +44,12 @@ const gateSection = "\n\n---\n## Review gate\nThis is a gated dry run: you have 
 	"message with the exact plan of actions you propose (commands, files, content). " +
 	"A human reviews this plan before execution."
 
+// Headless runs have nobody to answer questions; without this, models
+// sometimes end a run asking for confirmation instead of acting.
+const systemPrompt = "You are an unattended scheduled agent run by watchd. No human can " +
+	"answer questions mid-run. Never ask for confirmation or end with a question; " +
+	"investigate with your tools and report findings and conclusions directly."
+
 func Run(a *agent.Agent, s *store.Store) (*store.Run, error) {
 	prompt := a.Prompt
 	if a.Memory {
@@ -111,6 +117,7 @@ func commonArgs(a *agent.Agent, tools []string) []string {
 	args := []string{
 		"--output-format", "json",
 		"--model", a.Model,
+		"--append-system-prompt", systemPrompt,
 	}
 
 	if a.MaxTurns > 0 {
