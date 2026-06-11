@@ -30,7 +30,7 @@ watchd init          # creates agents/example.md
 watchd run example
 ```
 
-An agent is one file. Frontmatter is the config, the body is the prompt:
+An agent is one file. Frontmatter is the config, the body is the prompt. Save this as `agents/uptime.md`:
 
 ```markdown
 ---
