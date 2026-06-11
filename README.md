@@ -37,7 +37,7 @@ An agent is one file. Frontmatter is the config, the body is the prompt. Save th
 name: uptime
 schedule: 5m
 model: haiku
-budget: 0.02
+budget: 0.10
 ---
 
 Check if https://api.myapp.com/health returns 200. If the response is
@@ -151,7 +151,7 @@ On top of that, cron gives you none of the operational layer: no cost tracking, 
 | `name` | filename | Agent identifier |
 | `schedule` | none | Interval: `30s`, `5m`, `2h`, `1d` (empty = manual only) |
 | `model` | `sonnet` | Claude model (`haiku` for cheap high-frequency loops) |
-| `budget` | none | Max cost per run in USD, enforced mid-run |
+| `budget` | none | Max cost per run in USD, enforced mid-run. A run has ~$0.05 of fixed CLI overhead, so keep budgets at `0.10` or above |
 | `memory` | `false` | Curated memory file, injected and rewritten every run |
 | `gate` | `false` | Read-only dry run, execute only after approval |
 | `notify` | none | Shell command fired on pending or error |

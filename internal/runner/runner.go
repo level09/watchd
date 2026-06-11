@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -19,13 +20,14 @@ import (
 // Current CLI versions return an array of events; the docs also describe a
 // single-object shape, so parseOutput accepts both.
 type ClaudeEvent struct {
-	Type         string  `json:"type"`
-	Subtype      string  `json:"subtype"`
-	IsError      bool    `json:"is_error"`
-	Result       string  `json:"result"`
-	NumTurns     int     `json:"num_turns"`
-	TotalCostUSD float64 `json:"total_cost_usd"`
-	SessionID    string  `json:"session_id"`
+	Type         string   `json:"type"`
+	Subtype      string   `json:"subtype"`
+	IsError      bool     `json:"is_error"`
+	Result       string   `json:"result"`
+	NumTurns     int      `json:"num_turns"`
+	TotalCostUSD float64  `json:"total_cost_usd"`
+	SessionID    string   `json:"session_id"`
+	Errors       []string `json:"errors"`
 	Usage        struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
@@ -142,7 +144,9 @@ func commonArgs(a *agent.Agent, tools []string) []string {
 func invoke(a *agent.Agent, prompt string, args []string) *store.Run {
 	start := time.Now()
 	cmd := exec.Command("claude", args...)
-	output, err := cmd.Output()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
 	duration := time.Since(start)
 
 	run := &store.Run{
@@ -155,16 +159,22 @@ func invoke(a *agent.Agent, prompt string, args []string) *store.Run {
 	}
 
 	if err != nil {
+		// claude exits non-zero on failures like a budget kill but still
+		// emits the result JSON (cost, session, errors) on stdout
+		if out := bytes.TrimSpace(stdout.Bytes()); len(out) > 0 && (out[0] == '[' || out[0] == '{') {
+			parseOutput(out, run)
+		}
 		run.Status = "error"
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			run.Error = string(exitErr.Stderr)
-		} else {
+		if run.Error == "" {
+			run.Error = strings.TrimSpace(stderr.String())
+		}
+		if run.Error == "" {
 			run.Error = err.Error()
 		}
 		return run
 	}
 
-	parseOutput(output, run)
+	parseOutput(stdout.Bytes(), run)
 	return run
 }
 
@@ -201,10 +211,14 @@ func parseOutput(output []byte, run *store.Run) {
 	run.OutputTokens = result.Usage.OutputTokens
 
 	// is_error can be true even with subtype "success" (e.g. auth failures);
-	// subtypes like error_max_turns carry is_error false
-	if result.IsError || strings.HasPrefix(result.Subtype, "error") {
+	// subtypes like error_max_turns carry is_error false; budget kills exit
+	// non-zero with the reason only in the errors array
+	if result.IsError || strings.HasPrefix(result.Subtype, "error") || len(result.Errors) > 0 {
 		run.Status = "error"
-		run.Error = result.Result
+		run.Error = strings.Join(result.Errors, "; ")
+		if run.Error == "" {
+			run.Error = result.Result
+		}
 		if run.Error == "" {
 			run.Error = result.Subtype
 		}

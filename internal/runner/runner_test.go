@@ -50,6 +50,22 @@ func TestParseOutputIsErrorWithSuccessSubtype(t *testing.T) {
 	}
 }
 
+func TestParseOutputErrorsArray(t *testing.T) {
+	// Budget kills exit non-zero with subtype success, is_error false,
+	// and the reason only in the errors array
+	output := []byte(`[{"type":"result","subtype":"success","is_error":false,"result":"","session_id":"s",
+		"total_cost_usd":0.056,"errors":["Reached maximum budget ($0.02)"]}]`)
+	run := &store.Run{}
+	parseOutput(output, run)
+
+	if run.Status != "error" || !strings.Contains(run.Error, "maximum budget") {
+		t.Errorf("errors array not surfaced: status=%q error=%q", run.Status, run.Error)
+	}
+	if run.CostUSD != 0.056 {
+		t.Errorf("cost lost on budget kill: %v", run.CostUSD)
+	}
+}
+
 func TestParseOutputPlainTextFallback(t *testing.T) {
 	run := &store.Run{}
 	parseOutput([]byte("just text\n"), run)
