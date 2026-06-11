@@ -14,7 +14,7 @@ import (
 	"github.com/level09/watchd/internal/store"
 )
 
-const version = "3.0.0"
+const version = "1.0.0"
 const agentsDir = "agents"
 
 func Run(args []string) error {
