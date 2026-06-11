@@ -61,6 +61,9 @@ The frontmatter configures scheduling and cost limits. The body is the prompt Cl
 | `watchd list` | Show all agents |
 | `watchd logs [name]` | Run history |
 | `watchd costs` | Cost breakdown by agent |
+| `watchd pending` | Gated runs awaiting approval |
+| `watchd approve <id>` | Execute a pending run's plan |
+| `watchd reject <id>` | Discard a pending run |
 | `watchd up` | Start scheduler |
 
 ## Frontmatter options
@@ -72,9 +75,22 @@ The frontmatter configures scheduling and cost limits. The body is the prompt Cl
 | `model` | `sonnet` | Claude model |
 | `permission_mode` | `default` | `default`, `plan`, `full` |
 | `max_turns` | - | Limit agentic turns |
-| `budget` | - | Max cost per run in USD |
+| `budget` | - | Max cost per run in USD, enforced mid-run via `--max-budget-usd` |
 | `tools` | - | Restrict allowed tools |
 | `mcp_config` | - | Path to MCP config JSON |
+| `memory` | `false` | Curated `memory/<name>.md` injected each run, updated from the run's output |
+| `gate` | `false` | Read-only dry run proposes a plan, execute only after `watchd approve` |
+| `notify` | - | Shell command run when a run lands pending or errors |
+
+## Loops that compound
+
+`memory: true` gives each agent a curated memory file: injected into the prompt at the start of every run, and rewritten from the run's output (the agent appends a dated entry and prunes stale ones). A 30-minute scan agent stops re-reporting the same findings and starts building on them, without stuffing raw past output into the prompt.
+
+`gate: true` makes agents safe to point at real systems: the first pass runs with read-only tools and must end with a concrete plan, which lands in `watchd pending`. Approving resumes the same session with the agent's real tools; rejecting discards it.
+
+`notify` closes the async-supervision loop: watchd runs your command (ntfy, Telegram, anything) with `WATCHD_AGENT`, `WATCHD_RUN_ID`, `WATCHD_STATUS`, `WATCHD_RESULT` in the environment, so pending plans reach you instead of waiting to be noticed.
+
+Every run records `prompt_hash` and `agent_hash`, so you can always answer "which instructions produced this output."
 
 ## Requirements
 

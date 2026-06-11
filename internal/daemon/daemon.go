@@ -93,8 +93,11 @@ func printRunResult(run *store.Run) {
 		return
 	}
 	icon := "✓"
-	if run.Status == "error" {
+	switch run.Status {
+	case "error":
 		icon = "✗"
+	case "pending":
+		icon = "⏸"
 	}
 	cost := ""
 	if run.CostUSD > 0 {
@@ -103,6 +106,9 @@ func printRunResult(run *store.Run) {
 	fmt.Printf("  %s %s in %s%s\n", icon, run.Agent, run.Duration.Round(time.Millisecond), cost)
 	if run.Error != "" {
 		fmt.Printf("    error: %s\n", truncate(run.Error, 200))
+	}
+	if run.Status == "pending" {
+		fmt.Printf("    awaiting approval: watchd approve %s\n", run.ID)
 	}
 }
 

@@ -45,6 +45,18 @@ func Run(args []string) error {
 		return cmdLogs(name)
 	case "costs":
 		return cmdCosts()
+	case "pending":
+		return cmdPending()
+	case "approve":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: watchd approve <run-id>")
+		}
+		return cmdApprove(args[1])
+	case "reject":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: watchd reject <run-id>")
+		}
+		return cmdReject(args[1])
 	case "up":
 		return cmdUp()
 	case "edit":
@@ -221,6 +233,79 @@ func cmdCosts() error {
 	return nil
 }
 
+func cmdPending() error {
+	s := store.New(".")
+	runs, err := s.GetRuns("", 0)
+	if err != nil {
+		return err
+	}
+
+	found := false
+	for _, r := range runs {
+		if r.Status != "pending" {
+			continue
+		}
+		if !found {
+			fmt.Printf("%-36s %-16s %s\n", "RUN", "AGENT", "PROPOSED")
+			found = true
+		}
+		fmt.Printf("%-36s %-16s %s\n", r.ID, r.Agent, truncate(r.Result, 80))
+	}
+	if !found {
+		fmt.Println("nothing pending")
+		return nil
+	}
+	fmt.Println("\napprove with: watchd approve <run-id>")
+	return nil
+}
+
+func cmdApprove(id string) error {
+	s := store.New(".")
+	pending, err := s.GetRun(id)
+	if err != nil {
+		return err
+	}
+	if pending.Status != "pending" {
+		return fmt.Errorf("run %s is %s, not pending", id, pending.Status)
+	}
+
+	agents, err := agent.Discover(agentsDir)
+	if err != nil {
+		return err
+	}
+	a := agent.FindByName(agents, pending.Agent)
+	if a == nil {
+		return fmt.Errorf("agent %q not found in %s/", pending.Agent, agentsDir)
+	}
+
+	fmt.Printf("approving %s, executing plan...\n", id)
+	run, err := runner.Approve(a, pending, s)
+	if err != nil {
+		return err
+	}
+
+	printRun(run)
+	return nil
+}
+
+func cmdReject(id string) error {
+	s := store.New(".")
+	run, err := s.GetRun(id)
+	if err != nil {
+		return err
+	}
+	if run.Status != "pending" {
+		return fmt.Errorf("run %s is %s, not pending", id, run.Status)
+	}
+
+	run.Status = "rejected"
+	if err := s.SaveRun(run); err != nil {
+		return err
+	}
+	fmt.Printf("rejected %s\n", id)
+	return nil
+}
+
 func cmdUp() error {
 	s := store.New(".")
 	return daemon.Start(agentsDir, s)
@@ -288,6 +373,9 @@ commands:
   list          show all agents
   logs [name]   show run history
   costs         show cost breakdown
+  pending       list gated runs awaiting approval
+  approve <id>  execute a pending run's plan
+  reject <id>   discard a pending run
   up            start scheduler (run all scheduled agents)
   help          show this help
   version       show version`
@@ -299,8 +387,11 @@ func printRun(run *store.Run) {
 		return
 	}
 	icon := "✓"
-	if run.Status == "error" {
+	switch run.Status {
+	case "error":
 		icon = "✗"
+	case "pending":
+		icon = "⏸"
 	}
 	cost := ""
 	if run.CostUSD > 0 {
@@ -318,6 +409,9 @@ func printRun(run *store.Run) {
 	}
 	if run.Error != "" {
 		fmt.Printf("error: %s\n", run.Error)
+	}
+	if run.Status == "pending" {
+		fmt.Printf("awaiting approval: watchd approve %s\n", run.ID)
 	}
 }
 
@@ -342,7 +436,6 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
-
 
 const exampleAgent = `---
 name: example
