@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,18 +12,22 @@ import (
 )
 
 type Agent struct {
-	Name     string   `yaml:"name"`
-	Schedule string   `yaml:"schedule"`
-	Model    string   `yaml:"model"`
-	Mode     string   `yaml:"permission_mode"`
-	MaxTurns int      `yaml:"max_turns"`
-	Tools    []string `yaml:"tools"`
-	Budget   float64  `yaml:"budget"`
-	MCPConfig string  `yaml:"mcp_config"`
+	Name      string   `yaml:"name"`
+	Schedule  string   `yaml:"schedule"`
+	Model     string   `yaml:"model"`
+	Mode      string   `yaml:"permission_mode"`
+	MaxTurns  int      `yaml:"max_turns"`
+	Tools     []string `yaml:"tools"`
+	Budget    float64  `yaml:"budget"`
+	MCPConfig string   `yaml:"mcp_config"`
+	Memory    bool     `yaml:"memory"`
+	Gate      bool     `yaml:"gate"`
+	Notify    string   `yaml:"notify"`
 
 	// Parsed from file
 	Prompt   string `yaml:"-"`
 	FilePath string `yaml:"-"`
+	Hash     string `yaml:"-"`
 }
 
 func Load(path string) (*Agent, error) {
@@ -37,6 +43,8 @@ func Load(path string) (*Agent, error) {
 	}
 
 	agent.FilePath = path
+	sum := sha256.Sum256(data)
+	agent.Hash = hex.EncodeToString(sum[:])[:12]
 	if agent.Name == "" {
 		agent.Name = strings.TrimSuffix(filepath.Base(path), ".md")
 	}
