@@ -14,7 +14,7 @@ import (
 	"github.com/level09/watchd/internal/store"
 )
 
-const version = "1.0.0"
+const version = "1.0.1"
 const agentsDir = "agents"
 
 func Run(args []string) error {
@@ -439,12 +439,11 @@ func truncate(s string, n int) string {
 
 const exampleAgent = `---
 name: example
-model: sonnet
-permission_mode: default
+model: haiku
 max_turns: 5
 ---
 
 # Example Agent
 
-What is the current time? Reply in one sentence.
+Run df -h and tell me if any disk is over 80% full. One sentence verdict.
 `
