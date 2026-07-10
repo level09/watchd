@@ -4,12 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"gopkg.in/yaml.v3"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 type Agent struct {
@@ -27,11 +26,9 @@ type Agent struct {
 	Goal          string   `yaml:"goal"`
 	Verify        string   `yaml:"verify"`
 	VerifyTimeout string   `yaml:"verify_timeout"`
-
-	// Parsed from file
-	Prompt   string `yaml:"-"`
-	FilePath string `yaml:"-"`
-	Hash     string `yaml:"-"`
+	Prompt        string   `yaml:"-"`
+	FilePath      string   `yaml:"-"`
+	Hash          string   `yaml:"-"`
 }
 
 func Load(path string) (*Agent, error) {
@@ -39,13 +36,11 @@ func Load(path string) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	content := string(data)
 	agent, err := parse(content)
 	if err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
-
 	agent.FilePath = path
 	sum := sha256.Sum256(data)
 	agent.Hash = hex.EncodeToString(sum[:])[:12]
@@ -61,10 +56,8 @@ func Load(path string) (*Agent, error) {
 	if err := agent.validate(); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
-
 	return agent, nil
 }
-
 func (a *Agent) validate() error {
 	if a.Verify != "" && a.Goal == "" {
 		return fmt.Errorf("verify requires goal")
@@ -80,7 +73,6 @@ func (a *Agent) validate() error {
 	}
 	return nil
 }
-
 func (a *Agent) VerificationTimeout() time.Duration {
 	if a.VerifyTimeout == "" {
 		return 2 * time.Minute
@@ -88,28 +80,28 @@ func (a *Agent) VerificationTimeout() time.Duration {
 	d, _ := time.ParseDuration(a.VerifyTimeout)
 	return d
 }
-
 func parse(content string) (*Agent, error) {
-	// Split frontmatter from body
 	if !strings.HasPrefix(content, "---\n") {
 		return nil, fmt.Errorf("missing YAML frontmatter (must start with ---)")
 	}
-
 	parts := strings.SplitN(content[4:], "\n---", 2)
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("missing closing --- for frontmatter")
 	}
-
 	var agent Agent
 	if err := yaml.Unmarshal([]byte(parts[0]), &agent); err != nil {
 		return nil, fmt.Errorf("invalid frontmatter: %w", err)
 	}
-
 	agent.Prompt = strings.TrimSpace(parts[1])
 	return &agent, nil
 }
-
 func Discover(dir string) ([]*Agent, error) {
+	return discover(dir, false)
+}
+func DiscoverStrict(dir string) ([]*Agent, error) {
+	return discover(dir, true)
+}
+func discover(dir string, strict bool) ([]*Agent, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -117,7 +109,6 @@ func Discover(dir string) ([]*Agent, error) {
 		}
 		return nil, err
 	}
-
 	var agents []*Agent
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
@@ -126,18 +117,18 @@ func Discover(dir string) ([]*Agent, error) {
 		if strings.HasPrefix(entry.Name(), "_") || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-
 		agent, err := Load(filepath.Join(dir, entry.Name()))
 		if err != nil {
+			if strict {
+				return nil, err
+			}
 			fmt.Fprintf(os.Stderr, "warning: skipping %s: %v\n", entry.Name(), err)
 			continue
 		}
 		agents = append(agents, agent)
 	}
-
 	return agents, nil
 }
-
 func FindByName(agents []*Agent, name string) *Agent {
 	for _, a := range agents {
 		if a.Name == name {

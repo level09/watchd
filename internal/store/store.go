@@ -30,11 +30,9 @@ type Run struct {
 	OutcomeRatings     []OutcomeRating `json:"outcome_ratings,omitempty"`
 	VerificationBefore *Verification   `json:"verification_before,omitempty"`
 	VerificationAfter  *Verification   `json:"verification_after,omitempty"`
-	// Provenance: which instructions produced this output
-	PromptHash string `json:"prompt_hash,omitempty"`
-	AgentHash  string `json:"agent_hash,omitempty"`
+	PromptHash         string          `json:"prompt_hash,omitempty"`
+	AgentHash          string          `json:"agent_hash,omitempty"`
 }
-
 type Allocation struct {
 	Score            float64 `json:"score"`
 	ReservedUSD      float64 `json:"reserved_usd"`
@@ -42,14 +40,12 @@ type Allocation struct {
 	RemainingUSD     float64 `json:"remaining_usd_before"`
 	Reason           string  `json:"reason"`
 }
-
 type OutcomeRating struct {
 	Value   string    `json:"value"`
 	Source  string    `json:"source"`
 	Note    string    `json:"note,omitempty"`
 	RatedAt time.Time `json:"rated_at"`
 }
-
 type Verification struct {
 	Command    string `json:"command"`
 	Passed     bool   `json:"passed"`
@@ -70,34 +66,24 @@ type Store struct {
 	dir string
 }
 
-func New(dir string) *Store {
-	return &Store{dir: dir}
-}
-
+func New(dir string) *Store { return &Store{dir: dir} }
 func (s *Store) SaveRun(run *Run) error {
 	runsDir := filepath.Join(s.dir, "runs")
 	os.MkdirAll(runsDir, 0755)
-
-	// File per run: runs/agent_timestamp.json; the run ID is the filename base,
-	// so SaveRun is an upsert by ID
 	if run.ID == "" {
-		run.ID = fmt.Sprintf("%s_%s", run.Agent, run.StartedAt.Format("2006-01-02_150405"))
+		run.ID = fmt.Sprintf("%s_%s", run.Agent, run.StartedAt.Format("2006-01-02_150405.000000000"))
 	}
-
 	data, err := json.MarshalIndent(run, "", "  ")
 	if err != nil {
 		return err
 	}
-
 	return os.WriteFile(filepath.Join(runsDir, run.ID+".json"), data, 0644)
 }
-
 func (s *Store) GetRun(id string) (*Run, error) {
 	data, err := os.ReadFile(filepath.Join(s.dir, "runs", id+".json"))
 	if err != nil {
 		return nil, fmt.Errorf("run %q not found", id)
 	}
-
 	var run Run
 	if err := json.Unmarshal(data, &run); err != nil {
 		return nil, err
@@ -105,7 +91,6 @@ func (s *Store) GetRun(id string) (*Run, error) {
 	run.ID = id
 	return &run, nil
 }
-
 func (s *Store) GetRuns(agentName string, limit int) ([]Run, error) {
 	runsDir := filepath.Join(s.dir, "runs")
 	entries, err := os.ReadDir(runsDir)
@@ -115,26 +100,21 @@ func (s *Store) GetRuns(agentName string, limit int) ([]Run, error) {
 		}
 		return nil, err
 	}
-
 	var runs []Run
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-
-		// Filter by agent name if specified
 		if agentName != "" {
 			name := entry.Name()
 			if len(name) < len(agentName)+1 || name[:len(agentName)+1] != agentName+"_" {
 				continue
 			}
 		}
-
 		data, err := os.ReadFile(filepath.Join(runsDir, entry.Name()))
 		if err != nil {
 			continue
 		}
-
 		var run Run
 		if err := json.Unmarshal(data, &run); err != nil {
 			continue
@@ -144,19 +124,14 @@ func (s *Store) GetRuns(agentName string, limit int) ([]Run, error) {
 		}
 		runs = append(runs, run)
 	}
-
-	// Sort by time descending
 	sort.Slice(runs, func(i, j int) bool {
 		return runs[i].StartedAt.After(runs[j].StartedAt)
 	})
-
 	if limit > 0 && len(runs) > limit {
 		runs = runs[:limit]
 	}
-
 	return runs, nil
 }
-
 func (s *Store) AppendOutcome(id string, rating OutcomeRating) (*Run, error) {
 	if rating.Value != "useful" && rating.Value != "neutral" && rating.Value != "harmful" {
 		return nil, fmt.Errorf("invalid outcome %q (use useful, neutral, or harmful)", rating.Value)
@@ -164,7 +139,6 @@ func (s *Store) AppendOutcome(id string, rating OutcomeRating) (*Run, error) {
 	if rating.Source != "human" && rating.Source != "verify" {
 		return nil, fmt.Errorf("invalid outcome source %q", rating.Source)
 	}
-
 	run, err := s.GetRun(id)
 	if err != nil {
 		return nil, err
@@ -180,13 +154,4 @@ func (s *Store) AppendOutcome(id string, rating OutcomeRating) (*Run, error) {
 		return nil, err
 	}
 	return run, nil
-}
-
-func (s *Store) TotalCost(agentName string) float64 {
-	runs, _ := s.GetRuns(agentName, 0)
-	var total float64
-	for _, r := range runs {
-		total += r.CostUSD
-	}
-	return total
 }

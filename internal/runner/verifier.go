@@ -4,10 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/level09/watchd/internal/store"
 	"os/exec"
 	"time"
-
-	"github.com/level09/watchd/internal/store"
 )
 
 const verificationOutputLimit = 8 * 1024
@@ -33,8 +32,8 @@ func RunVerifier(command string, timeout time.Duration) (*store.Verification, er
 		verification.ExitCode = 0
 		return verification, nil
 	}
-	var exitErr *exec.ExitError
-	if !asExitError(runErr, &exitErr) {
+	exitErr, ok := runErr.(*exec.ExitError)
+	if !ok {
 		verification.Error = runErr.Error()
 		return verification, fmt.Errorf("starting verifier: %w", runErr)
 	}
@@ -45,15 +44,6 @@ func RunVerifier(command string, timeout time.Duration) (*store.Verification, er
 	}
 	return verification, nil
 }
-
-func asExitError(err error, target **exec.ExitError) bool {
-	exitErr, ok := err.(*exec.ExitError)
-	if ok {
-		*target = exitErr
-	}
-	return ok
-}
-
 func truncateVerificationOutput(output []byte) string {
 	output = bytes.TrimSpace(output)
 	if len(output) > verificationOutputLimit {

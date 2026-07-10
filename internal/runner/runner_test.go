@@ -219,12 +219,31 @@ func TestApproveResolvedSupersedesRecoveredGoal(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolved := testResolved("propose", "test -f "+ready)
-	run, err := ApproveResolved(resolved, pending, s)
+	run, err := ApproveResolvedWithAllocation(resolved, nil, pending, s)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if invoked != 0 || run.Status != "superseded" {
 		t.Fatalf("run = %+v invoked=%d", run, invoked)
+	}
+}
+
+func TestApproveResolvedStoresAllocation(t *testing.T) {
+	t.Chdir(t.TempDir())
+	withFakeClaude(t, func(a *agent.Agent, prompt string, args []string) *store.Run { return successfulRun(a) })
+	s := store.New(".")
+	pending := &store.Run{Agent: "repair", Goal: "product", Status: "pending", SessionID: "s1", StartedAt: time.Now()}
+	if err := s.SaveRun(pending); err != nil {
+		t.Fatal(err)
+	}
+	resolved := testResolved("propose", "")
+	allocation := &store.Allocation{Score: 4.2, ReservedUSD: 0.2, RemainingUSD: 0.8, Reason: "approved intervention"}
+	run, err := ApproveResolvedWithAllocation(resolved, allocation, pending, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Allocation == nil || run.Allocation.Score != 4.2 || run.GoalHash != "goal123" {
+		t.Fatalf("action evidence = %+v", run)
 	}
 }
 

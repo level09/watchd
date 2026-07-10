@@ -5,16 +5,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/level09/watchd/internal/agent"
+	"github.com/level09/watchd/internal/store"
+	"gopkg.in/yaml.v3"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/level09/watchd/internal/agent"
-	"github.com/level09/watchd/internal/store"
-	"gopkg.in/yaml.v3"
 )
 
 type Policy struct {
@@ -23,7 +22,6 @@ type Policy struct {
 	MaxUnrated  int
 	MaxPending  int
 }
-
 type Goal struct {
 	Name        string
 	Weight      float64
@@ -33,13 +31,11 @@ type Goal struct {
 	Hash        string
 	FilePath    string
 }
-
 type ResolvedAgent struct {
 	Agent     *agent.Agent
 	Goal      *Goal
 	Authority string
 }
-
 type StrategyStats struct {
 	Rated      int
 	Errors     int
@@ -49,7 +45,6 @@ type StrategyStats struct {
 	CostCount  int
 	HasUnrated bool
 }
-
 type Snapshot struct {
 	Now          time.Time
 	Policy       Policy
@@ -63,7 +58,6 @@ type Snapshot struct {
 	TotalSamples int
 	Stats        map[string]StrategyStats
 }
-
 type Decision struct {
 	Agent            *ResolvedAgent
 	Admit            bool
@@ -73,7 +67,6 @@ type Decision struct {
 	RemainingUSD     float64
 	Reason           string
 }
-
 type rawPolicy struct {
 	DailyBudget *float64 `yaml:"daily_budget"`
 	Exploration *float64 `yaml:"exploration"`
@@ -153,7 +146,6 @@ func DiscoverGoals(dir string) (map[string]*Goal, error) {
 	}
 	return goals, nil
 }
-
 func loadGoal(path string) (*Goal, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -199,7 +191,6 @@ func loadGoal(path string) (*Goal, error) {
 	goal.Hash = semanticHash(goal.Name, goal.Authority, goal.Body)
 	return goal, nil
 }
-
 func Resolve(a *agent.Agent, goals map[string]*Goal, policy *Policy) (*ResolvedAgent, error) {
 	if policy == nil {
 		return &ResolvedAgent{Agent: a, Authority: legacyAuthority(a)}, nil
@@ -220,7 +211,6 @@ func Resolve(a *agent.Agent, goals map[string]*Goal, policy *Policy) (*ResolvedA
 	}
 	return &ResolvedAgent{Agent: a, Goal: goal, Authority: authority}, nil
 }
-
 func BuildSnapshot(now time.Time, policy Policy, goals map[string]*Goal, agents []*ResolvedAgent, runs []store.Run) (Snapshot, error) {
 	if !positiveFinite(policy.DailyBudget) {
 		return Snapshot{}, fmt.Errorf("daily budget must be a positive finite number")
@@ -239,7 +229,6 @@ func BuildSnapshot(now time.Time, policy Policy, goals map[string]*Goal, agents 
 			return Snapshot{}, fmt.Errorf("goal %q has invalid daily budget", name)
 		}
 	}
-
 	snapshot := Snapshot{
 		Now: now, Policy: policy, Goals: goals, Agents: agents, Runs: runs,
 		GoalSpent: make(map[string]float64), Stats: make(map[string]StrategyStats),
@@ -256,7 +245,6 @@ func BuildSnapshot(now time.Time, policy Policy, goals map[string]*Goal, agents 
 			snapshot.Unrated++
 		}
 	}
-
 	for _, resolved := range agents {
 		if resolved == nil || resolved.Agent == nil || resolved.Goal == nil {
 			return Snapshot{}, fmt.Errorf("nil resolved agent")
@@ -270,7 +258,6 @@ func BuildSnapshot(now time.Time, policy Policy, goals map[string]*Goal, agents 
 	}
 	return snapshot, nil
 }
-
 func Decide(snapshot Snapshot) []Decision {
 	remaining := snapshot.Policy.DailyBudget - snapshot.GlobalSpent
 	goalRemaining := make(map[string]float64, len(snapshot.Goals))
@@ -281,33 +268,17 @@ func Decide(snapshot Snapshot) []Decision {
 			goalRemaining[name] = math.Inf(1)
 		}
 	}
-
 	var candidates []Decision
 	var skipped []Decision
 	for _, resolved := range snapshot.Agents {
 		decision := scoreDecision(snapshot, resolved)
-		budget := resolved.Agent.Budget
-		switch {
-		case remaining+1e-9 < budget:
-			decision.Reason = "global daily budget exhausted"
+		if reason := ineligible(snapshot, resolved, remaining, goalRemaining[resolved.Goal.Name], snapshot.Pending, snapshot.Unrated); reason != "" {
+			decision.Reason = reason
 			skipped = append(skipped, decision)
-		case goalRemaining[resolved.Goal.Name]+1e-9 < budget:
-			decision.Reason = "goal daily budget exhausted"
-			skipped = append(skipped, decision)
-		case resolved.Authority == "propose" && snapshot.Pending >= snapshot.Policy.MaxPending:
-			decision.Reason = "pending review cap reached"
-			skipped = append(skipped, decision)
-		case snapshot.Stats[strategyKey(resolved)].HasUnrated:
-			decision.Reason = "agent has unrated output"
-			skipped = append(skipped, decision)
-		case resolved.Agent.Verify == "" && snapshot.Unrated >= snapshot.Policy.MaxUnrated:
-			decision.Reason = "unrated review cap reached"
-			skipped = append(skipped, decision)
-		default:
+		} else {
 			candidates = append(candidates, decision)
 		}
 	}
-
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].Score != candidates[j].Score {
 			return candidates[i].Score > candidates[j].Score
@@ -317,7 +288,6 @@ func Decide(snapshot Snapshot) []Decision {
 		}
 		return candidates[i].Agent.Agent.Name < candidates[j].Agent.Agent.Name
 	})
-
 	pending := snapshot.Pending
 	unrated := snapshot.Unrated
 	var admitted []Decision
@@ -325,21 +295,8 @@ func Decide(snapshot Snapshot) []Decision {
 		budget := decision.Agent.Agent.Budget
 		goalName := decision.Agent.Goal.Name
 		decision.RemainingUSD = remaining
-		switch {
-		case remaining+1e-9 < budget:
-			decision.Reason = "global daily budget exhausted"
-			skipped = append(skipped, decision)
-			continue
-		case goalRemaining[goalName]+1e-9 < budget:
-			decision.Reason = "goal daily budget exhausted"
-			skipped = append(skipped, decision)
-			continue
-		case decision.Agent.Authority == "propose" && pending >= snapshot.Policy.MaxPending:
-			decision.Reason = "pending review cap reached"
-			skipped = append(skipped, decision)
-			continue
-		case decision.Agent.Agent.Verify == "" && unrated >= snapshot.Policy.MaxUnrated:
-			decision.Reason = "unrated review cap reached"
+		if reason := ineligible(snapshot, decision.Agent, remaining, goalRemaining[goalName], pending, unrated); reason != "" {
+			decision.Reason = reason
 			skipped = append(skipped, decision)
 			continue
 		}
@@ -355,7 +312,6 @@ func Decide(snapshot Snapshot) []Decision {
 			unrated++
 		}
 	}
-
 	sort.Slice(skipped, func(i, j int) bool {
 		if skipped[i].Agent.Goal.Name != skipped[j].Agent.Goal.Name {
 			return skipped[i].Agent.Goal.Name < skipped[j].Agent.Goal.Name
@@ -364,7 +320,24 @@ func Decide(snapshot Snapshot) []Decision {
 	})
 	return append(admitted, skipped...)
 }
-
+func ineligible(snapshot Snapshot, resolved *ResolvedAgent, remaining, goalRemaining float64, pending, unrated int) string {
+	if remaining+1e-9 < resolved.Agent.Budget {
+		return "global daily budget exhausted"
+	}
+	if goalRemaining+1e-9 < resolved.Agent.Budget {
+		return "goal daily budget exhausted"
+	}
+	if resolved.Authority == "propose" && pending >= snapshot.Policy.MaxPending {
+		return "pending review cap reached"
+	}
+	if snapshot.Stats[strategyKey(resolved)].HasUnrated {
+		return "agent has unrated output"
+	}
+	if resolved.Agent.Verify == "" && unrated >= snapshot.Policy.MaxUnrated {
+		return "unrated review cap reached"
+	}
+	return ""
+}
 func scoreDecision(snapshot Snapshot, resolved *ResolvedAgent) Decision {
 	stats := snapshot.Stats[strategyKey(resolved)]
 	samples := stats.Rated + stats.Errors
@@ -380,7 +353,6 @@ func scoreDecision(snapshot Snapshot, resolved *ResolvedAgent) Decision {
 	score := resolved.Goal.Weight * (expected + snapshot.Policy.Exploration*uncertainty) / estimated
 	return Decision{Agent: resolved, Score: score, EstimatedCostUSD: estimated}
 }
-
 func strategyStats(resolved *ResolvedAgent, runs []store.Run) StrategyStats {
 	var stats StrategyStats
 	for i := range runs {
@@ -408,23 +380,22 @@ func strategyStats(resolved *ResolvedAgent, runs []store.Run) StrategyStats {
 	}
 	return stats
 }
-
 func strategyKey(resolved *ResolvedAgent) string {
 	return resolved.Agent.Name + "\x00" + resolved.Agent.Hash + "\x00" + resolved.Goal.Hash
 }
-
+func StatsFor(snapshot Snapshot, resolved *ResolvedAgent) StrategyStats {
+	return snapshot.Stats[strategyKey(resolved)]
+}
 func sameLocalDay(a, b time.Time) bool {
 	a = a.In(b.Location())
 	return a.Year() == b.Year() && a.YearDay() == b.YearDay()
 }
-
 func legacyAuthority(a *agent.Agent) string {
 	if a.Gate {
 		return "propose"
 	}
 	return "act"
 }
-
 func splitMarkdown(content string) (string, string, error) {
 	if !strings.HasPrefix(content, "---\n") {
 		return "", "", fmt.Errorf("missing YAML frontmatter")
@@ -435,7 +406,6 @@ func splitMarkdown(content string) (string, string, error) {
 	}
 	return parts[0], parts[1], nil
 }
-
 func semanticHash(parts ...string) string {
 	h := sha256.New()
 	for _, part := range parts {
@@ -444,11 +414,9 @@ func semanticHash(parts ...string) string {
 	}
 	return hex.EncodeToString(h.Sum(nil))[:12]
 }
-
 func positiveFinite(value float64) bool {
 	return value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
-
 func SortedGoalNames(goals map[string]*Goal) []string {
 	names := make([]string, 0, len(goals))
 	for name := range goals {

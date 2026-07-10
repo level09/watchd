@@ -1,6 +1,9 @@
 package daemon
 
 import (
+	"io"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -8,6 +11,24 @@ import (
 	"github.com/level09/watchd/internal/portfolio"
 	"github.com/level09/watchd/internal/store"
 )
+
+func TestPrintingRunShowsPortfolioResult(t *testing.T) {
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	t.Cleanup(func() { os.Stdout = old })
+	runFn := printingRun(func(*portfolio.ResolvedAgent, *store.Allocation, *store.Store) (*store.Run, error) {
+		return &store.Run{Agent: "scan", Status: "success"}, nil
+	})
+	if _, err := runFn(nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	output, _ := io.ReadAll(r)
+	if !strings.Contains(string(output), "scan") {
+		t.Fatalf("output = %q", output)
+	}
+}
 
 func TestRunPortfolioDueUsesScoreOrderAndActualSpend(t *testing.T) {
 	now := time.Date(2026, 7, 10, 9, 0, 0, 0, time.Local)
