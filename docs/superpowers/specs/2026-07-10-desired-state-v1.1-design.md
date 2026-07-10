@@ -1,7 +1,7 @@
 # Watchd v1.1: Desired State
 
 Date: 2026-07-10
-Status: Approved design
+Status: Superseded by `2026-07-10-adaptive-outcome-portfolio-design.md`
 
 ## Product decision
 
