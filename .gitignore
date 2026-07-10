@@ -12,3 +12,6 @@ wheels/
 # Secrets
 .env
 watchd
+
+# Isolated feature worktrees
+.worktrees/
