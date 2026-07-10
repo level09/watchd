@@ -1,7 +1,7 @@
 # Watchd v1.1: Adaptive Outcome Portfolio
 
 Date: 2026-07-10
-Status: Approved direction, implementation pending written-spec review
+Status: Approved design
 
 ## Product decision
 
