@@ -42,3 +42,77 @@ func TestSaveRunUpsertByID(t *testing.T) {
 		t.Errorf("GetRuns ID = %q, want %q", runs[0].ID, run.ID)
 	}
 }
+
+func TestRunEvidenceRoundTrip(t *testing.T) {
+	s := New(t.TempDir())
+	now := time.Date(2026, 7, 10, 8, 30, 0, 0, time.UTC)
+	run := &Run{
+		Agent:     "scan",
+		Goal:      "product",
+		GoalHash:  "goal123",
+		AgentHash: "agent123",
+		Status:    "success",
+		StartedAt: now,
+		Allocation: &Allocation{
+			Score:            7.5,
+			ReservedUSD:      0.25,
+			EstimatedCostUSD: 0.12,
+			RemainingUSD:     0.80,
+			Reason:           "highest verified return",
+		},
+		OutcomeRatings: []OutcomeRating{
+			{Value: "neutral", Source: "verify", RatedAt: now},
+			{Value: "useful", Source: "human", Note: "found the release blocker", RatedAt: now.Add(time.Minute)},
+		},
+		VerificationBefore: &Verification{Command: "test -f ready", Passed: false, ExitCode: 1, DurationMS: 4},
+		VerificationAfter:  &Verification{Command: "test -f ready", Passed: true, ExitCode: 0, DurationMS: 3},
+	}
+
+	if err := s.SaveRun(run); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetRun(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Goal != "product" || got.GoalHash != "goal123" || got.Allocation == nil {
+		t.Fatalf("portfolio evidence lost: %+v", got)
+	}
+	if got.VerificationBefore == nil || got.VerificationAfter == nil || !got.VerificationAfter.Passed {
+		t.Fatalf("verification evidence lost: %+v", got)
+	}
+	latest := got.LatestOutcome()
+	if latest == nil || latest.Value != "useful" || latest.Note != "found the release blocker" {
+		t.Fatalf("latest outcome = %+v", latest)
+	}
+}
+
+func TestAppendOutcome(t *testing.T) {
+	s := New(t.TempDir())
+	now := time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC)
+	run := &Run{Agent: "scan", Goal: "product", Status: "success", StartedAt: now}
+	if err := s.SaveRun(run); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.AppendOutcome(run.ID, OutcomeRating{
+		Value: "useful", Source: "human", Note: "actionable", RatedAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest := got.LatestOutcome(); latest == nil || latest.Value != "useful" {
+		t.Fatalf("latest outcome = %+v", latest)
+	}
+
+	pending := &Run{Agent: "scan", Goal: "product", Status: "pending", StartedAt: now.Add(time.Hour)}
+	if err := s.SaveRun(pending); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendOutcome(pending.ID, OutcomeRating{Value: "neutral", Source: "human", RatedAt: now}); err == nil {
+		t.Fatal("expected pending outcome to be rejected")
+	}
+	if _, err := s.AppendOutcome(run.ID, OutcomeRating{Value: "great", Source: "human", RatedAt: now}); err == nil {
+		t.Fatal("expected invalid outcome value to be rejected")
+	}
+}
