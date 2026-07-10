@@ -116,3 +116,23 @@ func TestAppendOutcome(t *testing.T) {
 		t.Fatal("expected invalid outcome value to be rejected")
 	}
 }
+
+func TestSaveRunDoesNotCollideWithinSecond(t *testing.T) {
+	s := New(t.TempDir())
+	started := time.Date(2026, 7, 10, 10, 0, 0, 123, time.UTC)
+	first := &Run{Agent: "scan", Status: "success", StartedAt: started}
+	second := &Run{Agent: "scan", Status: "satisfied", StartedAt: started.Add(time.Millisecond)}
+	if err := s.SaveRun(first); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveRun(second); err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == second.ID {
+		t.Fatalf("run IDs collided: %q", first.ID)
+	}
+	runs, err := s.GetRuns("scan", 0)
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("runs=%+v err=%v", runs, err)
+	}
+}

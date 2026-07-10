@@ -2,19 +2,17 @@ package daemon
 
 import (
 	"fmt"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
-
 	"github.com/level09/watchd/internal/agent"
 	"github.com/level09/watchd/internal/portfolio"
 	"github.com/level09/watchd/internal/runner"
 	"github.com/level09/watchd/internal/store"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 )
 
 type portfolioRunFunc func(*portfolio.ResolvedAgent, *store.Allocation, *store.Store) (*store.Run, error)
-
 type entry struct {
 	agent    *agent.Agent
 	resolved *portfolio.ResolvedAgent
@@ -22,24 +20,27 @@ type entry struct {
 }
 
 func Start(agentsDir string, s *store.Store) error {
-	agents, err := agent.Discover(agentsDir)
+	policy, err := portfolio.LoadPolicy("watchd.yaml")
 	if err != nil {
 		return err
 	}
-
+	var agents []*agent.Agent
+	if policy == nil {
+		agents, err = agent.Discover(agentsDir)
+	} else {
+		agents, err = agent.DiscoverStrict(agentsDir)
+	}
+	if err != nil {
+		return err
+	}
 	scheduled := []*agent.Agent{}
 	for _, a := range agents {
 		if a.Schedule != "" {
 			scheduled = append(scheduled, a)
 		}
 	}
-
 	if len(scheduled) == 0 {
 		return fmt.Errorf("no scheduled agents found")
-	}
-	policy, err := portfolio.LoadPolicy("watchd.yaml")
-	if err != nil {
-		return err
 	}
 	var goals map[string]*portfolio.Goal
 	resolvedByName := map[string]*portfolio.ResolvedAgent{}
@@ -56,12 +57,10 @@ func Start(agentsDir string, s *store.Store) error {
 			resolvedByName[a.Name] = resolved
 		}
 	}
-
 	fmt.Printf("watchd: starting with %d agent(s)\n", len(scheduled))
 	for _, a := range scheduled {
 		fmt.Printf("  %s  %s\n", a.Name, a.Schedule)
 	}
-
 	entries := make([]entry, len(scheduled))
 	now := time.Now()
 	for i, a := range scheduled {
@@ -75,32 +74,26 @@ func Start(agentsDir string, s *store.Store) error {
 		}
 		entries[i] = entry{agent: a, resolved: resolvedByName[a.Name], nextRun: nextRun}
 	}
-
 	if policy == nil {
 		for _, a := range scheduled {
 			fmt.Printf("watchd: running %s...\n", a.Name)
 			run, _ := runner.Run(a, s)
-			printRunResult(run)
+			runner.PrintRun(run)
 		}
 	} else {
-		decisions, err := runPortfolioDue(now, *policy, goals, dueResolved(entries, now), s, runner.RunResolved)
+		decisions, err := runPortfolioDue(now, *policy, goals, dueResolved(entries, now), s, printingRun(runner.RunResolved))
 		if err != nil {
 			return err
 		}
 		advanceAdmitted(entries, decisions, now)
 		printDecisions(decisions, map[string]string{})
 	}
-
-	// Signal handling
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	lastSkip := map[string]string{}
-
 	fmt.Println("watchd: waiting for schedules (ctrl+c to stop)")
-
 	for {
 		select {
 		case <-stop:
@@ -108,7 +101,7 @@ func Start(agentsDir string, s *store.Store) error {
 			return nil
 		case now := <-ticker.C:
 			if policy != nil {
-				decisions, err := runPortfolioDue(now, *policy, goals, dueResolved(entries, now), s, runner.RunResolved)
+				decisions, err := runPortfolioDue(now, *policy, goals, dueResolved(entries, now), s, printingRun(runner.RunResolved))
 				if err != nil {
 					return err
 				}
@@ -120,18 +113,22 @@ func Start(agentsDir string, s *store.Store) error {
 				if now.Before(e.nextRun) {
 					continue
 				}
-
 				fmt.Printf("watchd: running %s...\n", e.agent.Name)
 				run, _ := runner.Run(e.agent, s)
-				printRunResult(run)
-
+				runner.PrintRun(run)
 				interval, _ := parseInterval(e.agent.Schedule)
 				entries[i].nextRun = now.Add(interval)
 			}
 		}
 	}
 }
-
+func printingRun(runFn portfolioRunFunc) portfolioRunFunc {
+	return func(agent *portfolio.ResolvedAgent, allocation *store.Allocation, s *store.Store) (*store.Run, error) {
+		run, err := runFn(agent, allocation, s)
+		runner.PrintRun(run)
+		return run, err
+	}
+}
 func runPortfolioDue(now time.Time, policy portfolio.Policy, goals map[string]*portfolio.Goal, due []*portfolio.ResolvedAgent, s *store.Store, runFn portfolioRunFunc) ([]portfolio.Decision, error) {
 	remaining := append([]*portfolio.ResolvedAgent(nil), due...)
 	var admitted []portfolio.Decision
@@ -174,7 +171,6 @@ func runPortfolioDue(now time.Time, policy portfolio.Policy, goals map[string]*p
 	}
 	return admitted, nil
 }
-
 func dueResolved(entries []entry, now time.Time) []*portfolio.ResolvedAgent {
 	var due []*portfolio.ResolvedAgent
 	for _, entry := range entries {
@@ -184,7 +180,6 @@ func dueResolved(entries []entry, now time.Time) []*portfolio.ResolvedAgent {
 	}
 	return due
 }
-
 func advanceAdmitted(entries []entry, decisions []portfolio.Decision, now time.Time) {
 	for _, decision := range decisions {
 		if !decision.Admit {
@@ -198,7 +193,6 @@ func advanceAdmitted(entries []entry, decisions []portfolio.Decision, now time.T
 		}
 	}
 }
-
 func printDecisions(decisions []portfolio.Decision, lastSkip map[string]string) {
 	for _, decision := range decisions {
 		name := decision.Agent.Agent.Name
@@ -212,56 +206,19 @@ func printDecisions(decisions []portfolio.Decision, lastSkip map[string]string) 
 		}
 	}
 }
-
-func printRunResult(run *store.Run) {
-	if run == nil {
-		return
-	}
-	icon := "✓"
-	switch run.Status {
-	case "error":
-		icon = "✗"
-	case "pending":
-		icon = "⏸"
-	}
-	cost := ""
-	if run.CostUSD > 0 {
-		cost = fmt.Sprintf(" $%.4f", run.CostUSD)
-	}
-	fmt.Printf("  %s %s in %s%s\n", icon, run.Agent, run.Duration.Round(time.Millisecond), cost)
-	if run.Error != "" {
-		fmt.Printf("    error: %s\n", truncate(run.Error, 200))
-	}
-	if run.Status == "pending" {
-		fmt.Printf("    awaiting approval: watchd approve %s\n", run.ID)
-	}
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
-}
-
 func parseInterval(schedule string) (time.Duration, error) {
 	if schedule == "" {
 		return 0, fmt.Errorf("empty schedule")
 	}
-
-	// Simple interval: 30s, 5m, 2h, 1d
 	d, err := time.ParseDuration(schedule)
 	if err == nil {
 		return d, nil
 	}
-
-	// Handle "d" suffix (not supported by ParseDuration)
 	if len(schedule) > 1 && schedule[len(schedule)-1] == 'd' {
 		var n int
 		if _, err := fmt.Sscanf(schedule, "%dd", &n); err == nil {
 			return time.Duration(n) * 24 * time.Hour, nil
 		}
 	}
-
 	return 0, fmt.Errorf("invalid interval %q (use 30s, 5m, 2h, 1d)", schedule)
 }

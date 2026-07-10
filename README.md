@@ -1,8 +1,8 @@
 # watchd
 
-Wake up to what changed.
+Fund the loops that prove they help.
 
-Your agents are markdown files. watchd runs them on schedule with `claude -p`, tracks every dollar, remembers what each run found, and gates anything dangerous behind your approval. One Go binary. Zero config.
+Your goals and agents are markdown files. watchd decides which due agents deserve a finite daily budget, runs them with `claude -p`, records whether they helped, and shifts future spend toward verified value. Anything dangerous still waits for approval. One Go binary. Plain files.
 
 ```bash
 go install github.com/level09/watchd/cmd/watchd@latest
@@ -52,7 +52,112 @@ The endpoint returned HTTP 200 in 142ms. All healthy.
 $ watchd up          # start the scheduler
 ```
 
-That is the whole loop. Everything below is what makes it compound.
+That is the legacy loop. Add a portfolio when several agents compete for money
+and review attention.
+
+## The portfolio: schedules become eligibility
+
+Cron assumes every recurring job remains equally valuable. watchd does not.
+In portfolio mode, a schedule says when an agent is eligible. A deterministic
+allocator decides what runs from goal importance, useful outcomes per dollar,
+remaining budget, uncertainty, and review debt.
+
+Create `watchd.yaml`:
+
+```yaml
+daily_budget: 1.00
+exploration: 0.15
+max_unrated: 5
+max_pending: 3
+```
+
+Create `goals/product.md`:
+
+```markdown
+---
+name: product
+weight: 3
+daily_budget: 0.75
+authority: propose
+---
+
+Keep the product releasable and reduce work users cannot review.
+```
+
+Attach agents to the goal and give each a reservable per-run budget:
+
+```markdown
+---
+name: repo-health
+goal: product
+schedule: 6h
+model: sonnet
+budget: 0.25
+verify: go test ./...
+verify_timeout: 2m
+---
+
+Find the smallest high-leverage repair when the verifier fails.
+```
+
+Run the portfolio:
+
+```text
+$ watchd portfolio
+portfolio  spent $0.1800  remaining $0.8200  pending 1/3  unrated 2/5
+
+AGENT                GOAL                  SCORE    RESERVE DECISION
+repo-health          product              18.420    $0.2500 highest verified return
+competitor           product               4.118    $0.1000 agent has unrated output
+
+$ watchd outcome competitor_... useful exposed a pricing move
+rated competitor_... useful
+```
+
+Useful results raise future allocation. Neutral and harmful results lower it.
+New agents retain bounded exploration so a successful incumbent does not own
+the budget forever. Identical state always produces the same decision.
+
+No model judges the portfolio. The formula and every admission reason are
+stored and inspectable.
+
+### Authority
+
+Goals set the maximum authority:
+
+- `observe`: read-only tools, completed observation
+- `propose`: read-only tools, pending human approval
+- `act`: configured tools; `gate: true` can still reduce it to `propose`
+
+Use `observe` or `propose` for health and finance. Approval rechecks configured
+evidence before acting, so a recovered goal supersedes a stale plan.
+
+### Evidence
+
+An optional `verify` command checks reality before and after action:
+
+- Already true: save `satisfied` and spend no model tokens.
+- False before and true after: record an automatic `useful` outcome.
+- False after execution: save `incomplete` and record `neutral`.
+- Timeout, command configuration, or process failure: save `error`.
+
+Verifier output is bounded to 8 KiB and treated as untrusted data. Inspect it
+without running an agent:
+
+```bash
+watchd check repo-health
+```
+
+Research and judgment work can be rated manually:
+
+```bash
+watchd outcome <run-id> useful "changed today's decision"
+watchd outcome <run-id> neutral
+watchd outcome <run-id> harmful "created unsafe advice"
+```
+
+Ratings append to history rather than overwriting it. Your corrections remain
+auditable and become the portfolio's compounding asset.
 
 ## Memory: loops that compound
 
@@ -118,7 +223,7 @@ dbcleanup_2026-06-12_060003  dbcleanup  1. VACUUM ANALYZE on 4 bloated tables
 $ watchd approve dbcleanup_2026-06-12_060003
 ```
 
-Approving resumes the same session with the agent's real tools, so it executes exactly the plan you read. `watchd reject` discards it. The `notify` command fires the moment something lands pending or fails, with `WATCHD_AGENT`, `WATCHD_RUN_ID`, `WATCHD_STATUS` and `WATCHD_RESULT` in the environment, so the plan reaches your phone instead of waiting to be noticed.
+Approving resumes the same session with the agent's real tools, so it executes exactly the plan you read. `watchd reject` discards it. The `notify` command fires for pending, error, incomplete, and harmful results, with `WATCHD_AGENT`, `WATCHD_RUN_ID`, `WATCHD_STATUS` and `WATCHD_RESULT` in the environment, so the result reaches your phone instead of waiting to be noticed.
 
 ## Why not cron + bash
 
@@ -140,6 +245,9 @@ On top of that, cron gives you none of the operational layer: no cost tracking, 
 | `watchd up` | Start the scheduler |
 | `watchd logs [name]` | Run history |
 | `watchd costs` | Spend per agent |
+| `watchd portfolio` | Budget, review debt, scores, and admission reasons |
+| `watchd outcome <id> <value> [note]` | Record useful, neutral, or harmful value |
+| `watchd check <name>` | Run only an agent's verifier |
 | `watchd pending` | Gated runs awaiting approval |
 | `watchd approve <id>` | Execute a pending plan |
 | `watchd reject <id>` | Discard a pending plan |
@@ -154,7 +262,10 @@ On top of that, cron gives you none of the operational layer: no cost tracking, 
 | `budget` | none | Max cost per run in USD, enforced mid-run. A run has ~$0.05 of fixed CLI overhead, so keep budgets at `0.10` or above |
 | `memory` | `false` | Curated memory file, injected and rewritten every run |
 | `gate` | `false` | Read-only dry run, execute only after approval |
-| `notify` | none | Shell command fired on pending or error |
+| `notify` | none | Shell command fired on pending, error, incomplete, or harmful |
+| `goal` | none | Goal identifier under `goals/`; enables portfolio allocation |
+| `verify` | none | Shell evidence command run before and after action |
+| `verify_timeout` | `2m` | Positive timeout for `verify` |
 | `max_turns` | none | Limit agentic turns |
 | `permission_mode` | `default` | Claude permission mode |
 | `tools` | minimal set | Restrict allowed tools |
@@ -162,18 +273,24 @@ On top of that, cron gives you none of the operational layer: no cost tracking, 
 
 ## Under the hood
 
-watchd is a thin orchestration layer, about 1,000 lines of Go. No AI runtime, no API keys to manage. It spawns `claude -p`, parses the JSON output, and records every run with its cost, token counts, and a hash of the exact instructions that produced it, so you can always answer "which prompt did this."
+watchd is a thin orchestration layer under 2,000 lines of Go. No AI runtime,
+database, or API keys to manage. It spawns `claude -p`, parses JSON output, and
+records cost, evidence, allocation, outcomes, and instruction hashes.
 
 ```
 cmd/watchd          entry point, one binary, no runtime deps
 internal/cli        all commands
 internal/agent      markdown + YAML frontmatter parsing
+internal/portfolio  goals, policy, review limits, and deterministic allocation
 internal/runner     spawns claude -p, memory, gate, notify
 internal/store      run history as JSON files with provenance
 internal/daemon     scheduler loop
 ```
 
-Requires Go 1.21+ and an authenticated [Claude Code](https://claude.com/claude-code) CLI.
+Requires Go 1.25+ and an authenticated [Claude Code](https://claude.com/claude-code) CLI.
+
+Without `watchd.yaml`, existing agents keep the v1.0 run-every-schedule
+behavior. Existing run JSON remains readable.
 
 ## License
 

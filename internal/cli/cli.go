@@ -1,41 +1,40 @@
 package cli
 
 import (
+	_ "embed"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"time"
-
 	"github.com/level09/watchd/internal/agent"
 	"github.com/level09/watchd/internal/daemon"
 	"github.com/level09/watchd/internal/portfolio"
 	"github.com/level09/watchd/internal/runner"
 	"github.com/level09/watchd/internal/store"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
 )
 
 const version = "1.1.0"
 const agentsDir = "agents"
 
+//go:embed help.txt
+var helpText string
+
+//go:embed example.md
+var exampleAgent string
+
 func Run(args []string) error {
 	if len(args) == 0 {
 		return cmdStatus()
 	}
-
 	switch args[0] {
 	case "init":
 		return cmdInit()
 	case "add":
-		if len(args) < 2 {
-			return fmt.Errorf("usage: watchd add <name>")
-		}
-		return cmdAdd(args[1])
+		return oneArg(args, "watchd add <name>", cmdAdd)
 	case "run":
-		if len(args) < 2 {
-			return fmt.Errorf("usage: watchd run <name>")
-		}
-		return cmdRun(args[1])
+		return oneArg(args, "watchd run <name>", cmdRun)
 	case "list":
 		return cmdList()
 	case "logs":
@@ -54,29 +53,17 @@ func Run(args []string) error {
 		}
 		return cmdOutcome(args[1], args[2], strings.Join(args[3:], " "))
 	case "check":
-		if len(args) < 2 {
-			return fmt.Errorf("usage: watchd check <agent>")
-		}
-		return cmdCheck(args[1])
+		return oneArg(args, "watchd check <agent>", cmdCheck)
 	case "pending":
 		return cmdPending()
 	case "approve":
-		if len(args) < 2 {
-			return fmt.Errorf("usage: watchd approve <run-id>")
-		}
-		return cmdApprove(args[1])
+		return oneArg(args, "watchd approve <run-id>", cmdApprove)
 	case "reject":
-		if len(args) < 2 {
-			return fmt.Errorf("usage: watchd reject <run-id>")
-		}
-		return cmdReject(args[1])
+		return oneArg(args, "watchd reject <run-id>", cmdReject)
 	case "up":
 		return cmdUp()
 	case "edit":
-		if len(args) < 2 {
-			return fmt.Errorf("usage: watchd edit <name>")
-		}
-		return cmdEdit(args[1])
+		return oneArg(args, "watchd edit <name>", cmdEdit)
 	case "version", "--version", "-v":
 		fmt.Println(version)
 		return nil
@@ -87,19 +74,22 @@ func Run(args []string) error {
 		return fmt.Errorf("unknown command: %s (try watchd help)", args[0])
 	}
 }
-
+func oneArg(args []string, usage string, command func(string) error) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: %s", usage)
+	}
+	return command(args[1])
+}
 func cmdInit() error {
 	if err := os.MkdirAll(agentsDir, 0755); err != nil {
 		return err
 	}
 	fmt.Println("created agents/")
-
 	example := filepath.Join(agentsDir, "example.md")
 	if _, err := os.Stat(example); err == nil {
 		fmt.Println("agents/example.md already exists")
 		return nil
 	}
-
 	err := os.WriteFile(example, []byte(exampleAgent), 0644)
 	if err != nil {
 		return err
@@ -108,17 +98,14 @@ func cmdInit() error {
 	fmt.Println("\nnext: watchd run example")
 	return nil
 }
-
 func cmdAdd(name string) error {
 	if err := os.MkdirAll(agentsDir, 0755); err != nil {
 		return err
 	}
-
 	path := filepath.Join(agentsDir, name+".md")
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("%s already exists", path)
 	}
-
 	tmpl := fmt.Sprintf(`---
 name: %s
 schedule: ""
@@ -126,19 +113,15 @@ model: sonnet
 permission_mode: default
 max_turns: 10
 ---
-
 # %s
-
 Describe what this agent should do.
 `, name, name)
-
 	if err := os.WriteFile(path, []byte(tmpl), 0644); err != nil {
 		return err
 	}
 	fmt.Printf("created %s\n", path)
 	return nil
 }
-
 func cmdRun(name string) error {
 	a, err := loadAgent(name)
 	if err != nil {
@@ -148,7 +131,6 @@ func cmdRun(name string) error {
 	if err != nil {
 		return err
 	}
-
 	s := store.New(".")
 	fmt.Printf("running %s...\n", a.Name)
 	var run *store.Run
@@ -160,13 +142,15 @@ func cmdRun(name string) error {
 	if err != nil {
 		return err
 	}
-
-	printRun(run)
+	runner.PrintRun(run)
 	return nil
 }
-
 func cmdList() error {
 	agents, err := agent.Discover(agentsDir)
+	if err != nil {
+		return err
+	}
+	reasons, err := eligibility()
 	if err != nil {
 		return err
 	}
@@ -174,22 +158,12 @@ func cmdList() error {
 		fmt.Println("no agents found. run: watchd init")
 		return nil
 	}
-
-	fmt.Printf("%-20s %-16s %-12s %-10s %s\n", "AGENT", "GOAL", "SCHEDULE", "MODEL", "MODE")
+	fmt.Printf("%-20s %-16s %-12s %-10s %-10s %s\n", "AGENT", "GOAL", "SCHEDULE", "MODEL", "MODE", "ELIGIBILITY")
 	for _, a := range agents {
-		schedule := a.Schedule
-		if schedule == "" {
-			schedule = "-"
-		}
-		goal := a.Goal
-		if goal == "" {
-			goal = "-"
-		}
-		fmt.Printf("%-20s %-16s %-12s %-10s %s\n", a.Name, goal, schedule, a.Model, a.Mode)
+		fmt.Printf("%-20s %-16s %-12s %-10s %-10s %s\n", a.Name, orDash(a.Goal), orDash(a.Schedule), a.Model, a.Mode, orDash(reasons[a.Name]))
 	}
 	return nil
 }
-
 func cmdOutcome(id, value, note string) error {
 	run, err := store.New(".").AppendOutcome(id, store.OutcomeRating{
 		Value: value, Source: "human", Note: note, RatedAt: time.Now(),
@@ -197,10 +171,20 @@ func cmdOutcome(id, value, note string) error {
 	if err != nil {
 		return err
 	}
+	if value == "harmful" {
+		a, err := loadAgent(run.Agent)
+		if err != nil {
+			return err
+		}
+		if a.Notify != "" {
+			if err := runner.Notify(a.Notify, run, value); err != nil {
+				return fmt.Errorf("notify %s: %w", run.Agent, err)
+			}
+		}
+	}
 	fmt.Printf("rated %s %s\n", run.ID, value)
 	return nil
 }
-
 func cmdCheck(name string) error {
 	a, err := loadAgent(name)
 	if err != nil {
@@ -224,7 +208,6 @@ func cmdCheck(name string) error {
 	fmt.Println("satisfied")
 	return nil
 }
-
 func cmdPortfolio() error {
 	policy, goals, resolved, runs, err := loadPortfolio()
 	if err != nil {
@@ -237,18 +220,33 @@ func cmdPortfolio() error {
 	remaining := policy.DailyBudget - snapshot.GlobalSpent
 	fmt.Printf("portfolio  spent $%.4f  remaining $%.4f  pending %d/%d  unrated %d/%d\n",
 		snapshot.GlobalSpent, remaining, snapshot.Pending, policy.MaxPending, snapshot.Unrated, policy.MaxUnrated)
-	fmt.Printf("%-16s %8s %10s\n", "GOAL", "WEIGHT", "SPENT")
-	for _, name := range portfolio.SortedGoalNames(goals) {
-		fmt.Printf("%-16s %8.2f $%9.4f\n", name, goals[name].Weight, snapshot.GoalSpent[name])
+	useful, totalCost := map[string]int{}, map[string]float64{}
+	for i := range runs {
+		totalCost[runs[i].Goal] += runs[i].CostUSD
+		if outcome := runs[i].LatestOutcome(); outcome != nil && outcome.Value == "useful" {
+			useful[runs[i].Goal]++
+		}
 	}
-	fmt.Printf("\n%-20s %-16s %10s %10s %s\n", "AGENT", "GOAL", "SCORE", "RESERVE", "DECISION")
+	fmt.Printf("%-16s %8s %10s %10s %10s %s\n", "GOAL", "WEIGHT", "SPENT", "CAP", "OUTCOMES", "EFFICIENCY")
+	for _, name := range portfolio.SortedGoalNames(goals) {
+		efficiency := "-"
+		cap := "-"
+		if useful[name] > 0 {
+			efficiency = fmt.Sprintf("$%.4f/useful", totalCost[name]/float64(useful[name]))
+		}
+		if goals[name].DailyBudget > 0 {
+			cap = fmt.Sprintf("$%.4f", goals[name].DailyBudget)
+		}
+		fmt.Printf("%-16s %8.2f $%9.4f %10s %8d useful %s\n", name, goals[name].Weight, snapshot.GoalSpent[name], cap, useful[name], efficiency)
+	}
+	fmt.Printf("\n%-20s %-16s %10s %10s %10s %s\n", "AGENT", "GOAL", "SCORE", "RATED", "AVG COST", "DECISION")
 	for _, decision := range portfolio.Decide(snapshot) {
-		fmt.Printf("%-20s %-16s %10.3f $%9.4f %s\n", decision.Agent.Agent.Name,
-			decision.Agent.Goal.Name, decision.Score, decision.Agent.Agent.Budget, decision.Reason)
+		stats := portfolio.StatsFor(snapshot, decision.Agent)
+		fmt.Printf("%-20s %-16s %10.3f %8d rated $%9.4f %s\n", decision.Agent.Agent.Name,
+			decision.Agent.Goal.Name, decision.Score, stats.Rated, decision.EstimatedCostUSD, decision.Reason)
 	}
 	return nil
 }
-
 func loadPortfolio() (*portfolio.Policy, map[string]*portfolio.Goal, []*portfolio.ResolvedAgent, []store.Run, error) {
 	policy, err := portfolio.LoadPolicy("watchd.yaml")
 	if err != nil {
@@ -261,7 +259,7 @@ func loadPortfolio() (*portfolio.Policy, map[string]*portfolio.Goal, []*portfoli
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	agents, err := agent.Discover(agentsDir)
+	agents, err := agent.DiscoverStrict(agentsDir)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -276,7 +274,6 @@ func loadPortfolio() (*portfolio.Policy, map[string]*portfolio.Goal, []*portfoli
 	runs, err := store.New(".").GetRuns("", 0)
 	return policy, goals, resolved, runs, err
 }
-
 func loadAgent(name string) (*agent.Agent, error) {
 	agents, err := agent.Discover(agentsDir)
 	if err != nil {
@@ -288,7 +285,25 @@ func loadAgent(name string) (*agent.Agent, error) {
 	}
 	return a, nil
 }
-
+func eligibility() (map[string]string, error) {
+	policy, err := portfolio.LoadPolicy("watchd.yaml")
+	if err != nil || policy == nil {
+		return nil, err
+	}
+	policy, goals, agents, runs, err := loadPortfolio()
+	if err != nil {
+		return nil, err
+	}
+	snapshot, err := portfolio.BuildSnapshot(time.Now(), *policy, goals, agents, runs)
+	if err != nil {
+		return nil, err
+	}
+	reasons := make(map[string]string, len(agents))
+	for _, decision := range portfolio.Decide(snapshot) {
+		reasons[decision.Agent.Agent.Name] = decision.Reason
+	}
+	return reasons, nil
+}
 func cmdLogs(name string) error {
 	s := store.New(".")
 	runs, err := s.GetRuns(name, 20)
@@ -299,7 +314,6 @@ func cmdLogs(name string) error {
 		fmt.Println("no runs found")
 		return nil
 	}
-
 	for _, r := range runs {
 		icon := "✓"
 		if r.Status == "error" {
@@ -313,36 +327,37 @@ func cmdLogs(name string) error {
 		fmt.Printf("%s %-16s %-8s %s%s  %s\n",
 			icon, r.Agent, r.Status,
 			r.Duration.Round(time.Millisecond), cost, ago)
-
 		if r.Error != "" {
 			fmt.Printf("  error: %s\n", truncate(r.Error, 200))
 		}
 		if r.Result != "" && r.Status == "success" {
 			fmt.Printf("  %s\n", truncate(r.Result, 500))
 		}
+		if outcome := r.LatestOutcome(); outcome != nil {
+			fmt.Printf("  outcome: %s\n", outcome.Value)
+		}
+		if r.Allocation != nil {
+			fmt.Printf("  allocation: %s\n", r.Allocation.Reason)
+		}
 	}
 	return nil
 }
-
 func cmdCosts() error {
 	s := store.New(".")
 	runs, err := s.GetRuns("", 0)
 	if err != nil {
 		return err
 	}
-
 	totals := map[string]float64{}
 	counts := map[string]int{}
 	for _, r := range runs {
 		totals[r.Agent] += r.CostUSD
 		counts[r.Agent]++
 	}
-
 	if len(totals) == 0 {
 		fmt.Println("no cost data yet")
 		return nil
 	}
-
 	var grand float64
 	fmt.Printf("%-20s %8s %6s\n", "AGENT", "COST", "RUNS")
 	for name, total := range totals {
@@ -352,14 +367,12 @@ func cmdCosts() error {
 	fmt.Printf("%-20s $%7.4f %6d\n", "TOTAL", grand, len(runs))
 	return nil
 }
-
 func cmdPending() error {
 	s := store.New(".")
 	runs, err := s.GetRuns("", 0)
 	if err != nil {
 		return err
 	}
-
 	found := false
 	for _, r := range runs {
 		if r.Status != "pending" {
@@ -378,7 +391,6 @@ func cmdPending() error {
 	fmt.Println("\napprove with: watchd approve <run-id>")
 	return nil
 }
-
 func cmdApprove(id string) error {
 	s := store.New(".")
 	pending, err := s.GetRun(id)
@@ -388,7 +400,6 @@ func cmdApprove(id string) error {
 	if pending.Status != "pending" {
 		return fmt.Errorf("run %s is %s, not pending", id, pending.Status)
 	}
-
 	agents, err := agent.Discover(agentsDir)
 	if err != nil {
 		return err
@@ -397,26 +408,23 @@ func cmdApprove(id string) error {
 	if a == nil {
 		return fmt.Errorf("agent %q not found in %s/", pending.Agent, agentsDir)
 	}
-	resolved, _, err := admitAgent(a, true)
+	resolved, allocation, err := admitAgent(a, true)
 	if err != nil {
 		return err
 	}
-
 	fmt.Printf("approving %s, executing plan...\n", id)
 	var run *store.Run
 	if resolved == nil {
 		run, err = runner.Approve(a, pending, s)
 	} else {
-		run, err = runner.ApproveResolved(resolved, pending, s)
+		run, err = runner.ApproveResolvedWithAllocation(resolved, allocation, pending, s)
 	}
 	if err != nil {
 		return err
 	}
-
-	printRun(run)
+	runner.PrintRun(run)
 	return nil
 }
-
 func cmdReject(id string) error {
 	s := store.New(".")
 	run, err := s.GetRun(id)
@@ -426,18 +434,14 @@ func cmdReject(id string) error {
 	if run.Status != "pending" {
 		return fmt.Errorf("run %s is %s, not pending", id, run.Status)
 	}
-
 	run.Status = "rejected"
+	run.OutcomeRatings = append(run.OutcomeRatings, store.OutcomeRating{Value: "neutral", Source: "verify", Note: "proposal rejected", RatedAt: time.Now()})
 	if err := s.SaveRun(run); err != nil {
-		return err
-	}
-	if _, err := s.AppendOutcome(id, store.OutcomeRating{Value: "neutral", Source: "verify", Note: "proposal rejected", RatedAt: time.Now()}); err != nil {
 		return err
 	}
 	fmt.Printf("rejected %s\n", id)
 	return nil
 }
-
 func admitAgent(a *agent.Agent, approval bool) (*portfolio.ResolvedAgent, *store.Allocation, error) {
 	policy, err := portfolio.LoadPolicy("watchd.yaml")
 	if err != nil || policy == nil {
@@ -462,7 +466,12 @@ func admitAgent(a *agent.Agent, approval bool) (*portfolio.ResolvedAgent, *store
 		if policy.DailyBudget-spent < a.Budget {
 			return nil, nil, fmt.Errorf("global daily budget exhausted")
 		}
-		return nil, &store.Allocation{ReservedUSD: a.Budget, EstimatedCostUSD: a.Budget, RemainingUSD: policy.DailyBudget - spent, Reason: "manual legacy run"}, nil
+		authority := "act"
+		if a.Gate {
+			authority = "propose"
+		}
+		resolved := &portfolio.ResolvedAgent{Agent: a, Authority: authority}
+		return resolved, &store.Allocation{ReservedUSD: a.Budget, EstimatedCostUSD: a.Budget, RemainingUSD: policy.DailyBudget - spent, Reason: "manual legacy run"}, nil
 	}
 	goals, err := portfolio.DiscoverGoals("goals")
 	if err != nil {
@@ -495,44 +504,41 @@ func admitAgent(a *agent.Agent, approval bool) (*portfolio.ResolvedAgent, *store
 	}
 	return resolved, allocation, nil
 }
-
-func cmdUp() error {
-	s := store.New(".")
-	return daemon.Start(agentsDir, s)
-}
-
+func cmdUp() error { return daemon.Start(agentsDir, store.New(".")) }
 func cmdEdit(name string) error {
 	path := filepath.Join(agentsDir, name+".md")
 	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("agent %q not found", name)
 	}
-
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
 		editor = "vim"
 	}
-
 	cmd := exec.Command(editor, path)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
-
 func cmdStatus() error {
 	agents, err := agent.Discover(agentsDir)
-	if err != nil || len(agents) == 0 {
+	if err != nil {
+		return err
+	}
+	if len(agents) == 0 {
 		printHelp()
 		return nil
 	}
-
+	reasons, err := eligibility()
+	if err != nil {
+		return err
+	}
 	s := store.New(".")
-	fmt.Printf("%-20s %-12s %-8s %-12s %s\n", "AGENT", "SCHEDULE", "STATUS", "COST", "LAST RUN")
+	fmt.Printf("%-20s %-16s %-12s %-8s %-12s %-12s %s\n", "AGENT", "GOAL", "SCHEDULE", "STATUS", "COST", "LAST RUN", "ELIGIBILITY")
 	for _, a := range agents {
-		runs, _ := s.GetRuns(a.Name, 1)
-		schedule := a.Schedule
-		if schedule == "" {
-			schedule = "-"
+		runs, err := s.GetRuns(a.Name, 1)
+		if err != nil {
+			return err
 		}
 		status := "-"
 		cost := "-"
@@ -545,70 +551,11 @@ func cmdStatus() error {
 			}
 			lastRun = relativeTime(r.StartedAt)
 		}
-		fmt.Printf("%-20s %-12s %-8s %-12s %s\n", a.Name, schedule, status, cost, lastRun)
+		fmt.Printf("%-20s %-16s %-12s %-8s %-12s %-12s %s\n", a.Name, orDash(a.Goal), orDash(a.Schedule), status, cost, lastRun, orDash(reasons[a.Name]))
 	}
 	return nil
 }
-
-func printHelp() {
-	help := `watchd v` + version + ` - schedule AI agents
-
-usage: watchd <command> [args]
-
-commands:
-  init          create agents/ directory with example
-  add <name>    scaffold a new agent
-  edit <name>   open agent in $EDITOR
-  run <name>    run an agent once
-  list          show all agents
-  logs [name]   show run history
-  costs         show cost breakdown
-  portfolio     show allocation, budget, and review debt
-  outcome <id> useful|neutral|harmful [note]
-                record whether a run created value
-  check <name>  run an agent's verifier without Claude
-  pending       list gated runs awaiting approval
-  approve <id>  execute a pending run's plan
-  reject <id>   discard a pending run
-  up            start scheduler (run all scheduled agents)
-  help          show this help
-  version       show version`
-	fmt.Println(help)
-}
-
-func printRun(run *store.Run) {
-	if run == nil {
-		return
-	}
-	icon := "✓"
-	switch run.Status {
-	case "error":
-		icon = "✗"
-	case "pending":
-		icon = "⏸"
-	}
-	cost := ""
-	if run.CostUSD > 0 {
-		cost = fmt.Sprintf(" ($%.4f)", run.CostUSD)
-	}
-	fmt.Printf("%s %s in %s%s\n", icon, run.Agent, run.Duration.Round(time.Millisecond), cost)
-
-	if run.Result != "" {
-		// Show first 500 chars of result
-		result := run.Result
-		if len(result) > 500 {
-			result = result[:500] + "..."
-		}
-		fmt.Println(result)
-	}
-	if run.Error != "" {
-		fmt.Printf("error: %s\n", run.Error)
-	}
-	if run.Status == "pending" {
-		fmt.Printf("awaiting approval: watchd approve %s\n", run.ID)
-	}
-}
-
+func printHelp() { fmt.Print(strings.ReplaceAll(helpText, "{{VERSION}}", version)) }
 func relativeTime(t time.Time) string {
 	d := time.Since(t)
 	switch {
@@ -622,7 +569,6 @@ func relativeTime(t time.Time) string {
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
 }
-
 func truncate(s string, n int) string {
 	s = strings.TrimSpace(s)
 	if len(s) <= n {
@@ -630,14 +576,9 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
-
-const exampleAgent = `---
-name: example
-model: haiku
-max_turns: 5
----
-
-# Example Agent
-
-Run df -h and tell me if any disk is over 80% full. One sentence verdict.
-`
+func orDash(value string) string {
+	if value == "" {
+		return "-"
+	}
+	return value
+}

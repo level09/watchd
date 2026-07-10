@@ -73,3 +73,16 @@ func TestRejectInvalidVerifierConfiguration(t *testing.T) {
 		})
 	}
 }
+
+func TestDiscoverStrictRejectsInvalidAgent(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "broken.md"), []byte("broken"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DiscoverStrict(dir); err == nil {
+		t.Fatal("expected strict discovery error")
+	}
+	if agents, err := Discover(dir); err != nil || len(agents) != 0 {
+		t.Fatalf("legacy discovery = %v, %v", agents, err)
+	}
+}
