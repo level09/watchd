@@ -10,11 +10,12 @@ import (
 
 	"github.com/level09/watchd/internal/agent"
 	"github.com/level09/watchd/internal/daemon"
+	"github.com/level09/watchd/internal/portfolio"
 	"github.com/level09/watchd/internal/runner"
 	"github.com/level09/watchd/internal/store"
 )
 
-const version = "1.0.2"
+const version = "1.1.0"
 const agentsDir = "agents"
 
 func Run(args []string) error {
@@ -45,6 +46,18 @@ func Run(args []string) error {
 		return cmdLogs(name)
 	case "costs":
 		return cmdCosts()
+	case "portfolio":
+		return cmdPortfolio()
+	case "outcome":
+		if len(args) < 3 {
+			return fmt.Errorf("usage: watchd outcome <run-id> useful|neutral|harmful [note]")
+		}
+		return cmdOutcome(args[1], args[2], strings.Join(args[3:], " "))
+	case "check":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: watchd check <agent>")
+		}
+		return cmdCheck(args[1])
 	case "pending":
 		return cmdPending()
 	case "approve":
@@ -127,19 +140,23 @@ Describe what this agent should do.
 }
 
 func cmdRun(name string) error {
-	agents, err := agent.Discover(agentsDir)
+	a, err := loadAgent(name)
+	if err != nil {
+		return err
+	}
+	resolved, allocation, err := admitAgent(a, false)
 	if err != nil {
 		return err
 	}
 
-	a := agent.FindByName(agents, name)
-	if a == nil {
-		return fmt.Errorf("agent %q not found in %s/", name, agentsDir)
-	}
-
 	s := store.New(".")
 	fmt.Printf("running %s...\n", a.Name)
-	run, err := runner.Run(a, s)
+	var run *store.Run
+	if resolved == nil {
+		run, err = runner.Run(a, s)
+	} else {
+		run, err = runner.RunResolved(resolved, allocation, s)
+	}
 	if err != nil {
 		return err
 	}
@@ -158,15 +175,118 @@ func cmdList() error {
 		return nil
 	}
 
-	fmt.Printf("%-20s %-12s %-10s %s\n", "AGENT", "SCHEDULE", "MODEL", "MODE")
+	fmt.Printf("%-20s %-16s %-12s %-10s %s\n", "AGENT", "GOAL", "SCHEDULE", "MODEL", "MODE")
 	for _, a := range agents {
 		schedule := a.Schedule
 		if schedule == "" {
 			schedule = "-"
 		}
-		fmt.Printf("%-20s %-12s %-10s %s\n", a.Name, schedule, a.Model, a.Mode)
+		goal := a.Goal
+		if goal == "" {
+			goal = "-"
+		}
+		fmt.Printf("%-20s %-16s %-12s %-10s %s\n", a.Name, goal, schedule, a.Model, a.Mode)
 	}
 	return nil
+}
+
+func cmdOutcome(id, value, note string) error {
+	run, err := store.New(".").AppendOutcome(id, store.OutcomeRating{
+		Value: value, Source: "human", Note: note, RatedAt: time.Now(),
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("rated %s %s\n", run.ID, value)
+	return nil
+}
+
+func cmdCheck(name string) error {
+	a, err := loadAgent(name)
+	if err != nil {
+		return err
+	}
+	if a.Verify == "" {
+		return fmt.Errorf("agent %q has no verifier", name)
+	}
+	verification, verifyErr := runner.RunVerifier(a.Verify, a.VerificationTimeout())
+	fmt.Printf("goal: %s\ncommand: %s\nduration: %dms\n", a.Goal, verification.Command, verification.DurationMS)
+	if verification.Output != "" {
+		fmt.Println(verification.Output)
+	}
+	if verifyErr != nil {
+		return verifyErr
+	}
+	if !verification.Passed {
+		fmt.Println("unsatisfied")
+		return fmt.Errorf("goal %q is unsatisfied", a.Goal)
+	}
+	fmt.Println("satisfied")
+	return nil
+}
+
+func cmdPortfolio() error {
+	policy, goals, resolved, runs, err := loadPortfolio()
+	if err != nil {
+		return err
+	}
+	snapshot, err := portfolio.BuildSnapshot(time.Now(), *policy, goals, resolved, runs)
+	if err != nil {
+		return err
+	}
+	remaining := policy.DailyBudget - snapshot.GlobalSpent
+	fmt.Printf("portfolio  spent $%.4f  remaining $%.4f  pending %d/%d  unrated %d/%d\n",
+		snapshot.GlobalSpent, remaining, snapshot.Pending, policy.MaxPending, snapshot.Unrated, policy.MaxUnrated)
+	fmt.Printf("%-16s %8s %10s\n", "GOAL", "WEIGHT", "SPENT")
+	for _, name := range portfolio.SortedGoalNames(goals) {
+		fmt.Printf("%-16s %8.2f $%9.4f\n", name, goals[name].Weight, snapshot.GoalSpent[name])
+	}
+	fmt.Printf("\n%-20s %-16s %10s %10s %s\n", "AGENT", "GOAL", "SCORE", "RESERVE", "DECISION")
+	for _, decision := range portfolio.Decide(snapshot) {
+		fmt.Printf("%-20s %-16s %10.3f $%9.4f %s\n", decision.Agent.Agent.Name,
+			decision.Agent.Goal.Name, decision.Score, decision.Agent.Agent.Budget, decision.Reason)
+	}
+	return nil
+}
+
+func loadPortfolio() (*portfolio.Policy, map[string]*portfolio.Goal, []*portfolio.ResolvedAgent, []store.Run, error) {
+	policy, err := portfolio.LoadPolicy("watchd.yaml")
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if policy == nil {
+		return nil, nil, nil, nil, fmt.Errorf("watchd.yaml not found")
+	}
+	goals, err := portfolio.DiscoverGoals("goals")
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	agents, err := agent.Discover(agentsDir)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	resolved := make([]*portfolio.ResolvedAgent, 0, len(agents))
+	for _, a := range agents {
+		r, err := portfolio.Resolve(a, goals, policy)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		resolved = append(resolved, r)
+	}
+	runs, err := store.New(".").GetRuns("", 0)
+	return policy, goals, resolved, runs, err
+}
+
+func loadAgent(name string) (*agent.Agent, error) {
+	agents, err := agent.Discover(agentsDir)
+	if err != nil {
+		return nil, err
+	}
+	a := agent.FindByName(agents, name)
+	if a == nil {
+		return nil, fmt.Errorf("agent %q not found in %s/", name, agentsDir)
+	}
+	return a, nil
 }
 
 func cmdLogs(name string) error {
@@ -277,9 +397,18 @@ func cmdApprove(id string) error {
 	if a == nil {
 		return fmt.Errorf("agent %q not found in %s/", pending.Agent, agentsDir)
 	}
+	resolved, _, err := admitAgent(a, true)
+	if err != nil {
+		return err
+	}
 
 	fmt.Printf("approving %s, executing plan...\n", id)
-	run, err := runner.Approve(a, pending, s)
+	var run *store.Run
+	if resolved == nil {
+		run, err = runner.Approve(a, pending, s)
+	} else {
+		run, err = runner.ApproveResolved(resolved, pending, s)
+	}
 	if err != nil {
 		return err
 	}
@@ -302,8 +431,69 @@ func cmdReject(id string) error {
 	if err := s.SaveRun(run); err != nil {
 		return err
 	}
+	if _, err := s.AppendOutcome(id, store.OutcomeRating{Value: "neutral", Source: "verify", Note: "proposal rejected", RatedAt: time.Now()}); err != nil {
+		return err
+	}
 	fmt.Printf("rejected %s\n", id)
 	return nil
+}
+
+func admitAgent(a *agent.Agent, approval bool) (*portfolio.ResolvedAgent, *store.Allocation, error) {
+	policy, err := portfolio.LoadPolicy("watchd.yaml")
+	if err != nil || policy == nil {
+		return nil, nil, err
+	}
+	if a.Goal == "" {
+		if a.Budget <= 0 {
+			return nil, nil, fmt.Errorf("legacy agent %q needs a positive budget in portfolio mode", a.Name)
+		}
+		runs, err := store.New(".").GetRuns("", 0)
+		if err != nil {
+			return nil, nil, err
+		}
+		spent := 0.0
+		now := time.Now()
+		for _, run := range runs {
+			local := run.StartedAt.In(now.Location())
+			if local.Year() == now.Year() && local.YearDay() == now.YearDay() {
+				spent += run.CostUSD
+			}
+		}
+		if policy.DailyBudget-spent < a.Budget {
+			return nil, nil, fmt.Errorf("global daily budget exhausted")
+		}
+		return nil, &store.Allocation{ReservedUSD: a.Budget, EstimatedCostUSD: a.Budget, RemainingUSD: policy.DailyBudget - spent, Reason: "manual legacy run"}, nil
+	}
+	goals, err := portfolio.DiscoverGoals("goals")
+	if err != nil {
+		return nil, nil, err
+	}
+	resolved, err := portfolio.Resolve(a, goals, policy)
+	if err != nil {
+		return nil, nil, err
+	}
+	if approval {
+		copy := *resolved
+		copy.Authority = "act"
+		resolved = &copy
+	}
+	runs, err := store.New(".").GetRuns("", 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	snapshot, err := portfolio.BuildSnapshot(time.Now(), *policy, goals, []*portfolio.ResolvedAgent{resolved}, runs)
+	if err != nil {
+		return nil, nil, err
+	}
+	decision := portfolio.Decide(snapshot)[0]
+	if !decision.Admit {
+		return nil, nil, fmt.Errorf("agent %q not admitted: %s", a.Name, decision.Reason)
+	}
+	allocation := &store.Allocation{
+		Score: decision.Score, ReservedUSD: decision.ReservedUSD, EstimatedCostUSD: decision.EstimatedCostUSD,
+		RemainingUSD: decision.RemainingUSD, Reason: decision.Reason,
+	}
+	return resolved, allocation, nil
 }
 
 func cmdUp() error {
@@ -373,6 +563,10 @@ commands:
   list          show all agents
   logs [name]   show run history
   costs         show cost breakdown
+  portfolio     show allocation, budget, and review debt
+  outcome <id> useful|neutral|harmful [note]
+                record whether a run created value
+  check <name>  run an agent's verifier without Claude
   pending       list gated runs awaiting approval
   approve <id>  execute a pending run's plan
   reject <id>   discard a pending run
