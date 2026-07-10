@@ -5,7 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/level09/watchd/internal/agent"
+	"github.com/level09/watchd/internal/portfolio"
 	"github.com/level09/watchd/internal/store"
 )
 
@@ -110,4 +113,143 @@ func TestExtractMemory(t *testing.T) {
 	if err != nil || !strings.Contains(string(data), "posts A, B reported") {
 		t.Errorf("memory not persisted: %v %q", err, data)
 	}
+}
+
+func TestRunResolvedSkipsSatisfiedGoal(t *testing.T) {
+	t.Chdir(t.TempDir())
+	invoked := 0
+	withFakeClaude(t, func(a *agent.Agent, prompt string, args []string) *store.Run {
+		invoked++
+		return successfulRun(a)
+	})
+
+	resolved := testResolved("act", "true")
+	run, err := RunResolved(resolved, &store.Allocation{Score: 2, ReservedUSD: 0.2}, store.New("."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invoked != 0 || run.Status != "satisfied" || run.VerificationBefore == nil || !run.VerificationBefore.Passed {
+		t.Fatalf("run = %+v invoked=%d", run, invoked)
+	}
+}
+
+func TestRunResolvedRecordsVerifiedOutcome(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	ready := filepath.Join(dir, "ready")
+	withFakeClaude(t, func(a *agent.Agent, prompt string, args []string) *store.Run {
+		if err := os.WriteFile(ready, []byte("ok"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		return successfulRun(a)
+	})
+
+	resolved := testResolved("act", "test -f "+ready)
+	run, err := RunResolved(resolved, &store.Allocation{Score: 2, ReservedUSD: 0.2}, store.New("."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest := run.LatestOutcome()
+	if run.Status != "success" || run.VerificationAfter == nil || !run.VerificationAfter.Passed || latest == nil || latest.Value != "useful" || latest.Source != "verify" {
+		t.Fatalf("run = %+v latest=%+v", run, latest)
+	}
+}
+
+func TestRunResolvedRecordsIncompleteOutcome(t *testing.T) {
+	t.Chdir(t.TempDir())
+	withFakeClaude(t, func(a *agent.Agent, prompt string, args []string) *store.Run { return successfulRun(a) })
+	resolved := testResolved("act", "false")
+	run, err := RunResolved(resolved, nil, store.New("."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest := run.LatestOutcome()
+	if run.Status != "incomplete" || latest == nil || latest.Value != "neutral" {
+		t.Fatalf("run = %+v latest=%+v", run, latest)
+	}
+}
+
+func TestRunResolvedEnforcesAuthority(t *testing.T) {
+	tests := []struct {
+		authority string
+		status    string
+		gateText  bool
+	}{
+		{authority: "observe", status: "success", gateText: false},
+		{authority: "propose", status: "pending", gateText: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.authority, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			withFakeClaude(t, func(a *agent.Agent, prompt string, args []string) *store.Run {
+				if strings.Contains(prompt, "Review gate") != tt.gateText {
+					t.Fatalf("prompt authority mismatch: %q", prompt)
+				}
+				for _, forbidden := range []string{"Write", "Bash"} {
+					if containsArg(args, forbidden) {
+						t.Fatalf("%s authority received %s", tt.authority, forbidden)
+					}
+				}
+				return successfulRun(a)
+			})
+			resolved := testResolved(tt.authority, "")
+			run, err := RunResolved(resolved, nil, store.New("."))
+			if err != nil || run.Status != tt.status {
+				t.Fatalf("run = %+v err=%v", run, err)
+			}
+		})
+	}
+}
+
+func TestApproveResolvedSupersedesRecoveredGoal(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	ready := filepath.Join(dir, "ready")
+	if err := os.WriteFile(ready, []byte("ok"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	invoked := 0
+	withFakeClaude(t, func(a *agent.Agent, prompt string, args []string) *store.Run {
+		invoked++
+		return successfulRun(a)
+	})
+	s := store.New(".")
+	pending := &store.Run{Agent: "repair", Goal: "product", Status: "pending", SessionID: "s1", StartedAt: time.Now()}
+	if err := s.SaveRun(pending); err != nil {
+		t.Fatal(err)
+	}
+	resolved := testResolved("propose", "test -f "+ready)
+	run, err := ApproveResolved(resolved, pending, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invoked != 0 || run.Status != "superseded" {
+		t.Fatalf("run = %+v invoked=%d", run, invoked)
+	}
+}
+
+func withFakeClaude(t *testing.T, fake func(*agent.Agent, string, []string) *store.Run) {
+	t.Helper()
+	old := invokeClaude
+	invokeClaude = fake
+	t.Cleanup(func() { invokeClaude = old })
+}
+
+func successfulRun(a *agent.Agent) *store.Run {
+	return &store.Run{Agent: a.Name, Status: "success", Result: "done", StartedAt: time.Now(), SessionID: "session"}
+}
+
+func testResolved(authority, verify string) *portfolio.ResolvedAgent {
+	goal := &portfolio.Goal{Name: "product", Weight: 1, Authority: authority, Body: "Improve the product.", Hash: "goal123"}
+	a := &agent.Agent{Name: "repair", Goal: "product", Hash: "agent123", Model: "sonnet", Mode: "default", Budget: 0.2, Verify: verify}
+	return &portfolio.ResolvedAgent{Agent: a, Goal: goal, Authority: authority}
+}
+
+func containsArg(args []string, value string) bool {
+	for _, arg := range args {
+		if arg == value {
+			return true
+		}
+	}
+	return false
 }
