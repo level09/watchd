@@ -54,6 +54,23 @@ $ watchd up          # start the scheduler
 
 That is the whole loop. Everything below is what makes it compound.
 
+## Edge Scout: research that compounds
+
+This repository includes a manual `agents/edge-scout.md` agent. It uses the
+global Edge Scout skill to recover existing context, scout the live frontier,
+test whether an idea is durable, and produce a gated plan. With `memory: true`
+and `gate: true`, every run is costed, resumable, and held for review before
+implementation or external action:
+
+```bash
+watchd run edge-scout
+watchd pending
+watchd approve <run-id>
+```
+
+The skill supplies the judgment workflow; watchd supplies the persistent run
+ledger, curated memory, budget enforcement, and approval boundary.
+
 ## Memory: loops that compound
 
 A scanner that re-reports the same findings is noise. Add one line of frontmatter and the agent gets a notes file it curates itself, injected at the start of every run and rewritten at the end:
