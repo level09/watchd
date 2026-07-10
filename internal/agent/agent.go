@@ -7,22 +7,26 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Agent struct {
-	Name      string   `yaml:"name"`
-	Schedule  string   `yaml:"schedule"`
-	Model     string   `yaml:"model"`
-	Mode      string   `yaml:"permission_mode"`
-	MaxTurns  int      `yaml:"max_turns"`
-	Tools     []string `yaml:"tools"`
-	Budget    float64  `yaml:"budget"`
-	MCPConfig string   `yaml:"mcp_config"`
-	Memory    bool     `yaml:"memory"`
-	Gate      bool     `yaml:"gate"`
-	Notify    string   `yaml:"notify"`
+	Name          string   `yaml:"name"`
+	Schedule      string   `yaml:"schedule"`
+	Model         string   `yaml:"model"`
+	Mode          string   `yaml:"permission_mode"`
+	MaxTurns      int      `yaml:"max_turns"`
+	Tools         []string `yaml:"tools"`
+	Budget        float64  `yaml:"budget"`
+	MCPConfig     string   `yaml:"mcp_config"`
+	Memory        bool     `yaml:"memory"`
+	Gate          bool     `yaml:"gate"`
+	Notify        string   `yaml:"notify"`
+	Goal          string   `yaml:"goal"`
+	Verify        string   `yaml:"verify"`
+	VerifyTimeout string   `yaml:"verify_timeout"`
 
 	// Parsed from file
 	Prompt   string `yaml:"-"`
@@ -54,8 +58,35 @@ func Load(path string) (*Agent, error) {
 	if agent.Mode == "" {
 		agent.Mode = "default"
 	}
+	if err := agent.validate(); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
 
 	return agent, nil
+}
+
+func (a *Agent) validate() error {
+	if a.Verify != "" && a.Goal == "" {
+		return fmt.Errorf("verify requires goal")
+	}
+	if a.VerifyTimeout != "" && a.Verify == "" {
+		return fmt.Errorf("verify_timeout requires verify")
+	}
+	if a.VerifyTimeout != "" {
+		d, err := time.ParseDuration(a.VerifyTimeout)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("verify_timeout must be a positive duration")
+		}
+	}
+	return nil
+}
+
+func (a *Agent) VerificationTimeout() time.Duration {
+	if a.VerifyTimeout == "" {
+		return 2 * time.Minute
+	}
+	d, _ := time.ParseDuration(a.VerifyTimeout)
+	return d
 }
 
 func parse(content string) (*Agent, error) {
