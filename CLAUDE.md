@@ -55,6 +55,7 @@ The markdown body is the prompt.
 - Runs record provenance: `prompt_hash` + `agent_hash` answer "what instructions produced this output"
 - `memory: true` makes loops compound: `memory/<name>.md` is injected into the prompt, and the agent returns updated memory after a `===MEMORY===` marker in its final message; watchd extracts it, writes the file, and strips it from the stored result. The agent never writes the file itself: tool-based writes leak into the CLI's own auto-memory directory and don't work on read-only gated passes
 - `gate: true` runs a read-only dry run (tool set is the enforcement; plan mode is advisory and ends `-p` runs with an empty result) that must end with a proposed plan; run lands as `pending`, `watchd approve <id>` resumes the session (`--resume session_id`) with the agent's real tools
+- `agents/edge-scout.md` is the research bridge for the global Edge Scout skill: manual, memory-backed, budgeted, and approval-gated so watchd owns durable run history while the skill owns the scouting method
 - The CLI's `result` field is only the text after the last tool call — a run that ends on a tool call returns an empty result
 - `--bare` breaks subscription auth on CLI 2.1.173 ("Not logged in"); revisit before adopting
 - Daemon uses simple interval timer, not cron expressions (yet)
