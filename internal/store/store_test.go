@@ -1,6 +1,9 @@
 package store
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -134,5 +137,33 @@ func TestSaveRunDoesNotCollideWithinSecond(t *testing.T) {
 	runs, err := s.GetRuns("scan", 0)
 	if err != nil || len(runs) != 2 {
 		t.Fatalf("runs=%+v err=%v", runs, err)
+	}
+}
+
+func TestGetRunsReportsCorruptLedgerEntry(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "runs"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "runs", "corrupt.json"), []byte("{"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(dir).GetRuns("", 0); err == nil || !strings.Contains(err.Error(), "corrupt.json") {
+		t.Fatalf("corrupt ledger error = %v", err)
+	}
+}
+
+func TestSaveRunLeavesNoPartialFiles(t *testing.T) {
+	dir := t.TempDir()
+	run := &Run{Agent: "scan", Status: "success", StartedAt: time.Now()}
+	if err := New(dir).SaveRun(run); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "runs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || filepath.Ext(entries[0].Name()) != ".json" {
+		t.Fatalf("ledger entries = %+v", entries)
 	}
 }

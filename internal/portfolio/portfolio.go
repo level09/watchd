@@ -57,6 +57,7 @@ type Snapshot struct {
 	Unrated      int
 	TotalSamples int
 	Stats        map[string]StrategyStats
+	AgentUnrated map[string]bool
 }
 type Decision struct {
 	Agent            *ResolvedAgent
@@ -231,7 +232,7 @@ func BuildSnapshot(now time.Time, policy Policy, goals map[string]*Goal, agents 
 	}
 	snapshot := Snapshot{
 		Now: now, Policy: policy, Goals: goals, Agents: agents, Runs: runs,
-		GoalSpent: make(map[string]float64), Stats: make(map[string]StrategyStats),
+		GoalSpent: make(map[string]float64), Stats: make(map[string]StrategyStats), AgentUnrated: make(map[string]bool),
 	}
 	for _, run := range runs {
 		if sameLocalDay(run.StartedAt, now) {
@@ -243,6 +244,7 @@ func BuildSnapshot(now time.Time, policy Policy, goals map[string]*Goal, agents 
 		}
 		if run.Goal != "" && run.Status == "success" && run.LatestOutcome() == nil {
 			snapshot.Unrated++
+			snapshot.AgentUnrated[run.Agent] = true
 		}
 	}
 	for _, resolved := range agents {
@@ -330,7 +332,7 @@ func ineligible(snapshot Snapshot, resolved *ResolvedAgent, remaining, goalRemai
 	if resolved.Authority == "propose" && pending >= snapshot.Policy.MaxPending {
 		return "pending review cap reached"
 	}
-	if snapshot.Stats[strategyKey(resolved)].HasUnrated {
+	if snapshot.AgentUnrated[resolved.Agent.Name] {
 		return "agent has unrated output"
 	}
 	if resolved.Agent.Verify == "" && unrated >= snapshot.Policy.MaxUnrated {
@@ -358,6 +360,9 @@ func strategyStats(resolved *ResolvedAgent, runs []store.Run) StrategyStats {
 	for i := range runs {
 		run := &runs[i]
 		if run.Agent != resolved.Agent.Name || run.AgentHash != resolved.Agent.Hash || run.GoalHash != resolved.Goal.Hash {
+			continue
+		}
+		if run.Status == "satisfied" {
 			continue
 		}
 		if run.CostUSD > 0 {

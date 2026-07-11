@@ -254,6 +254,43 @@ func TestBuildSnapshotRejectsNonFiniteInputs(t *testing.T) {
 	}
 }
 
+func TestSatisfiedRunsAreExcludedFromOutcomeStatistics(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.Local)
+	goal := &Goal{Name: "product", Weight: 1, Authority: "act", Hash: "g1"}
+	a := resolved("scan", "a1", 0.10, goal)
+	runs := []store.Run{{
+		Agent: "scan", Goal: "product", GoalHash: "g1", AgentHash: "a1", Status: "satisfied", StartedAt: now,
+		OutcomeRatings: []store.OutcomeRating{{Value: "harmful", Source: "human", RatedAt: now}},
+	}}
+	snapshot, err := BuildSnapshot(now, Policy{DailyBudget: 1, MaxUnrated: 5, MaxPending: 3}, map[string]*Goal{"product": goal}, []*ResolvedAgent{a}, runs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats := snapshot.Stats[strategyKey(a)]; stats.Rated != 0 || stats.HasUnrated {
+		t.Fatalf("satisfied run entered statistics: %+v", stats)
+	}
+	if decisions := Decide(snapshot); len(decisions) != 1 || !decisions[0].Admit {
+		t.Fatalf("satisfied run blocked allocation: %+v", decisions)
+	}
+}
+
+func TestUnratedLockSpansStrategyVersions(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.Local)
+	goal := &Goal{Name: "product", Weight: 1, Authority: "act", Hash: "g2"}
+	a := resolved("scan", "new-agent", 0.10, goal)
+	runs := []store.Run{{
+		Agent: "scan", Goal: "product", GoalHash: "old-goal", AgentHash: "old-agent", Status: "success", StartedAt: now,
+	}}
+	snapshot, err := BuildSnapshot(now, Policy{DailyBudget: 1, MaxUnrated: 5, MaxPending: 3}, map[string]*Goal{"product": goal}, []*ResolvedAgent{a}, runs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decisions := Decide(snapshot)
+	if len(decisions) != 1 || decisions[0].Admit || decisions[0].Reason != "agent has unrated output" {
+		t.Fatalf("cross-version unrated decision = %+v", decisions)
+	}
+}
+
 func resolved(name, hash string, budget float64, goal *Goal) *ResolvedAgent {
 	return &ResolvedAgent{Agent: &agent.Agent{Name: name, Hash: hash, Goal: goal.Name, Budget: budget}, Goal: goal, Authority: goal.Authority}
 }

@@ -92,7 +92,7 @@ func RunResolved(resolved *portfolio.ResolvedAgent, allocation *store.Allocation
 	}
 	if resolved.Authority == "propose" && run.Status == "success" {
 		run.Status = "pending"
-	} else if resolved.Authority == "act" && run.Status == "success" && a.Verify != "" {
+	} else if resolved.Authority != "propose" && run.Status == "success" && a.Verify != "" {
 		after, err := RunVerifier(a.Verify, a.VerificationTimeout())
 		run.VerificationAfter = after
 		if err != nil {
@@ -117,6 +117,22 @@ func ApproveResolvedWithAllocation(resolved *portfolio.ResolvedAgent, allocation
 	return approve(resolved.Agent, resolved.Goal, allocation, pending, s)
 }
 func approve(a *agent.Agent, goal *portfolio.Goal, allocation *store.Allocation, pending *store.Run, s *store.Store) (*store.Run, error) {
+	if goal != nil && goal.Authority == "observe" {
+		return nil, fmt.Errorf("goal %q is observe-only and cannot be approved", goal.Name)
+	}
+	if pending.AgentHash != "" && pending.AgentHash != a.Hash {
+		return nil, fmt.Errorf("run %s strategy changed: agent instructions no longer match the pending plan", pending.ID)
+	}
+	if goal != nil {
+		if pending.GoalHash != "" && pending.GoalHash != goal.Hash {
+			return nil, fmt.Errorf("run %s strategy changed: goal definition no longer matches the pending plan", pending.ID)
+		}
+		if pending.Goal != "" && pending.Goal != goal.Name {
+			return nil, fmt.Errorf("run %s strategy changed: goal reference no longer matches the pending plan", pending.ID)
+		}
+	} else if pending.GoalHash != "" || pending.Goal != "" {
+		return nil, fmt.Errorf("run %s strategy changed: goal no longer matches the pending plan", pending.ID)
+	}
 	if pending.SessionID == "" {
 		return nil, fmt.Errorf("run %s has no session to resume", pending.ID)
 	}
@@ -125,7 +141,12 @@ func approve(a *agent.Agent, goal *portfolio.Goal, allocation *store.Allocation,
 		var err error
 		before, err = RunVerifier(a.Verify, a.VerificationTimeout())
 		if err != nil {
-			return nil, err
+			run := portfolioRun(a, goal, allocation, "Approved. Execute the plan from your previous response.")
+			run.Status, run.Error, run.VerificationBefore = "error", err.Error(), before
+			if saveErr := finish(a, run, s); saveErr != nil {
+				return run, saveErr
+			}
+			return run, err
 		}
 		if before.Passed {
 			pending.Status = "superseded"
@@ -359,12 +380,7 @@ func PrintRun(run *store.Run) {
 	if run == nil {
 		return
 	}
-	icon := "✓"
-	if run.Status == "error" {
-		icon = "✗"
-	} else if run.Status == "pending" {
-		icon = "⏸"
-	}
+	icon := runIcon(run.Status)
 	cost := ""
 	if run.CostUSD > 0 {
 		cost = fmt.Sprintf(" ($%.4f)", run.CostUSD)
@@ -378,6 +394,22 @@ func PrintRun(run *store.Run) {
 	}
 	if run.Status == "pending" {
 		fmt.Printf("awaiting approval: watchd approve %s\n", run.ID)
+	}
+}
+func runIcon(status string) string {
+	switch status {
+	case "error", "harmful":
+		return "✗"
+	case "pending":
+		return "⏸"
+	case "approved":
+		return "▶"
+	case "incomplete":
+		return "!"
+	case "rejected", "superseded":
+		return "–"
+	default:
+		return "✓"
 	}
 }
 func shortHash(data []byte) string {

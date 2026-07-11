@@ -3,6 +3,7 @@ package agent
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -84,5 +85,32 @@ func TestDiscoverStrictRejectsInvalidAgent(t *testing.T) {
 	}
 	if agents, err := Discover(dir); err != nil || len(agents) != 0 {
 		t.Fatalf("legacy discovery = %v, %v", agents, err)
+	}
+}
+
+func TestDiscoverStrictReportsAllInvalidAgents(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "broken-a.md"), []byte("broken"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "broken-b.md"), []byte("also broken"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := DiscoverStrict(dir)
+	if err == nil || !strings.Contains(err.Error(), "broken-a.md") || !strings.Contains(err.Error(), "broken-b.md") {
+		t.Fatalf("strict discovery error = %v", err)
+	}
+}
+
+func TestDiscoverStrictRejectsDuplicateNames(t *testing.T) {
+	dir := t.TempDir()
+	content := "---\nname: same\n---\nRun."
+	for _, file := range []string{"a.md", "b.md"} {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := DiscoverStrict(dir); err == nil || !strings.Contains(err.Error(), "duplicate agent name") {
+		t.Fatalf("duplicate discovery error = %v", err)
 	}
 }

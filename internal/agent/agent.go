@@ -3,6 +3,7 @@ package agent
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"gopkg.in/yaml.v3"
 	"os"
@@ -110,6 +111,8 @@ func discover(dir string, strict bool) ([]*Agent, error) {
 		return nil, err
 	}
 	var agents []*Agent
+	var errs []error
+	seen := make(map[string]string)
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
@@ -120,12 +123,21 @@ func discover(dir string, strict bool) ([]*Agent, error) {
 		agent, err := Load(filepath.Join(dir, entry.Name()))
 		if err != nil {
 			if strict {
-				return nil, err
+				errs = append(errs, err)
+				continue
 			}
 			fmt.Fprintf(os.Stderr, "warning: skipping %s: %v\n", entry.Name(), err)
 			continue
 		}
+		if previous, exists := seen[agent.Name]; exists {
+			errs = append(errs, fmt.Errorf("duplicate agent name %q in %s and %s", agent.Name, previous, filepath.Join(dir, entry.Name())))
+			continue
+		}
+		seen[agent.Name] = filepath.Join(dir, entry.Name())
 		agents = append(agents, agent)
+	}
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
 	}
 	return agents, nil
 }
