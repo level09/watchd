@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/level09/watchd/internal/portfolio"
 	"github.com/level09/watchd/internal/store"
 )
 
@@ -19,10 +21,12 @@ func TestPortfolioSmoke(t *testing.T) {
 	writeFile(t, "goals/product.md", "---\nname: product\nweight: 3\nauthority: act\n---\nKeep the product releasable.")
 	writeFile(t, "goals/health.md", "---\nname: health\nweight: 1\nauthority: observe\n---\nSurface useful health observations without taking action.")
 	writeFile(t, "goals/review.md", "---\nname: review\nweight: 1\nauthority: propose\n---\nRequire human review before action.")
-	writeFile(t, "agents/repair.md", "---\nname: repair\ngoal: product\nbudget: 0.20\nverify: test -f "+ready+"\n---\nRepair the failing state.")
-	writeFile(t, "agents/research.md", "---\nname: research\ngoal: health\nbudget: 0.10\n---\nReport one useful observation.")
-	writeFile(t, "agents/neutral.md", "---\nname: neutral\ngoal: product\nbudget: 0.10\n---\nReport a result to be rated.")
-	writeFile(t, "agents/proposal.md", "---\nname: proposal\ngoal: review\nbudget: 0.10\ngate: true\n---\nPropose a safe action for review.")
+	writeFile(t, "agents/repair.md", "---\nname: repair\ngoal: product\nschedule: 1h\nbudget: 0.20\nverify: test -f "+ready+"\n---\nRepair the failing state.")
+	writeFile(t, "agents/research.md", "---\nname: research\ngoal: health\nschedule: 1h\nbudget: 0.10\n---\nReport one useful observation.")
+	writeFile(t, "agents/neutral.md", "---\nname: neutral\ngoal: product\nschedule: 1h\nbudget: 0.10\n---\nReport a result to be rated.")
+	writeFile(t, "agents/proposal.md", "---\nname: proposal\ngoal: review\nschedule: 1h\nbudget: 0.10\ngate: true\n---\nPropose a safe action for review.")
+	writeFile(t, "agents/explorer.md", "---\nname: explorer\ngoal: product\nschedule: 1h\nbudget: 0.10\n---\nExplore a new small improvement.")
+	writeFile(t, "agents/expensive.md", "---\nname: expensive\ngoal: product\nschedule: 1h\nbudget: 0.40\n---\nRun an expensive neutral strategy.")
 	writeFile(t, "bin/claude", "#!/bin/sh\nprintf x >> \"$WATCHD_SMOKE_COUNT\"\nif [ -n \"$WATCHD_SMOKE_READY\" ]; then touch \"$WATCHD_SMOKE_READY\"; fi\nprintf '%s' '[{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"done\",\"num_turns\":1,\"total_cost_usd\":0.05,\"session_id\":\"smoke\"}]'\n")
 	if err := os.Chmod(filepath.Join(shimDir, "claude"), 0755); err != nil {
 		t.Fatal(err)
@@ -100,5 +104,21 @@ func TestPortfolioSmoke(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("portfolio output missing %q: %s", want, output)
 		}
+	}
+	policy, goals, resolved, runs, err := loadPortfolio()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := portfolio.BuildSnapshot(time.Now(), *policy, goals, scheduledAgents(resolved), runs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decisions := portfolio.Decide(snapshot)
+	byName := make(map[string]portfolio.Decision, len(decisions))
+	for _, decision := range decisions {
+		byName[decision.Agent.Agent.Name] = decision
+	}
+	if !byName["explorer"].Admit || byName["expensive"].Admit {
+		t.Fatalf("allocation did not preserve exploration over expensive neutral strategy: %+v", byName)
 	}
 }

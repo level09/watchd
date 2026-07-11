@@ -172,6 +172,20 @@ func TestLogsShowOutcomeAndAllocation(t *testing.T) {
 	}
 }
 
+func TestPortfolioExcludesSatisfiedRunFromEfficiency(t *testing.T) {
+	t.Chdir(t.TempDir())
+	writeFile(t, "watchd.yaml", "daily_budget: 1.00\n")
+	writeFile(t, "goals/product.md", "---\nname: product\n---\nShip.")
+	writeFile(t, "agents/scan.md", "---\nname: scan\ngoal: product\nschedule: 1h\nbudget: 0.10\n---\nScan.")
+	if err := store.New(".").SaveRun(&store.Run{Agent: "scan", Goal: "product", Status: "satisfied", CostUSD: 0.05, StartedAt: time.Now(), OutcomeRatings: []store.OutcomeRating{{Value: "useful", Source: "human", RatedAt: time.Now()}}}); err != nil {
+		t.Fatal(err)
+	}
+	output, err := captureOutput(t, func() error { return Run([]string{"portfolio"}) })
+	if err != nil || strings.Contains(output, "$0.0500/useful") || !strings.Contains(output, "0 useful -") {
+		t.Fatalf("satisfied efficiency output=%q err=%v", output, err)
+	}
+}
+
 func TestManualRunUsesPortfolioAdmission(t *testing.T) {
 	t.Chdir(t.TempDir())
 	writeFile(t, "watchd.yaml", "daily_budget: 0.05\n")

@@ -213,7 +213,8 @@ func cmdPortfolio() error {
 	if err != nil {
 		return err
 	}
-	snapshot, err := portfolio.BuildSnapshot(time.Now(), *policy, goals, resolved, runs)
+	scheduled := scheduledAgents(resolved)
+	snapshot, err := portfolio.BuildSnapshot(time.Now(), *policy, goals, scheduled, runs)
 	if err != nil {
 		return err
 	}
@@ -223,7 +224,7 @@ func cmdPortfolio() error {
 	useful, totalCost := map[string]int{}, map[string]float64{}
 	for i := range runs {
 		totalCost[runs[i].Goal] += runs[i].CostUSD
-		if outcome := runs[i].LatestOutcome(); outcome != nil && outcome.Value == "useful" {
+		if runs[i].Status != "satisfied" && runs[i].LatestOutcome() != nil && runs[i].LatestOutcome().Value == "useful" {
 			useful[runs[i].Goal]++
 		}
 	}
@@ -242,12 +243,17 @@ func cmdPortfolio() error {
 	fmt.Printf("\n%-20s %-16s %10s %10s %10s %s\n", "AGENT", "GOAL", "SCORE", "RATED", "AVG COST", "DECISION")
 	for _, decision := range portfolio.Decide(snapshot) {
 		stats := portfolio.StatsFor(snapshot, decision.Agent)
-		reason := decision.Reason
-		if decision.Agent.Agent.Schedule == "" {
-			reason = "manual only"
-		}
 		fmt.Printf("%-20s %-16s %10.3f %8d rated $%9.4f %s\n", decision.Agent.Agent.Name,
-			decision.Agent.Goal.Name, decision.Score, stats.Rated, decision.EstimatedCostUSD, reason)
+			decision.Agent.Goal.Name, decision.Score, stats.Rated, decision.EstimatedCostUSD, decision.Reason)
+	}
+	var manual []string
+	for _, a := range resolved {
+		if a.Agent.Schedule == "" {
+			manual = append(manual, a.Agent.Name)
+		}
+	}
+	if len(manual) > 0 {
+		fmt.Printf("\nmanual portfolio agents: %s\n", strings.Join(manual, ", "))
 	}
 	return nil
 }
@@ -304,16 +310,21 @@ func eligibility() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	snapshot, err := portfolio.BuildSnapshot(time.Now(), *policy, goals, agents, runs)
+	snapshot, err := portfolio.BuildSnapshot(time.Now(), *policy, goals, scheduledAgents(agents), runs)
 	if err != nil {
 		return nil, err
 	}
 	reasons := make(map[string]string, len(agents))
-	for _, decision := range portfolio.Decide(snapshot) {
-		if decision.Agent.Agent.Schedule == "" {
-			reasons[decision.Agent.Agent.Name] = "manual only"
-			continue
+	allAgents, err := agent.DiscoverStrict(agentsDir)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range allAgents {
+		if a.Schedule == "" {
+			reasons[a.Name] = "manual only"
 		}
+	}
+	for _, decision := range portfolio.Decide(snapshot) {
 		reasons[decision.Agent.Agent.Name] = decision.Reason
 	}
 	return reasons, nil
@@ -425,9 +436,15 @@ func cmdApprove(id string) error {
 	if a.Verify != "" {
 		verification, verifyErr := runner.RunVerifier(a.Verify, a.VerificationTimeout())
 		if verifyErr != nil {
-			failure := &store.Run{Agent: a.Name, Goal: pending.Goal, AgentHash: a.Hash, Status: "error", Error: verifyErr.Error(), VerificationBefore: verification, StartedAt: time.Now()}
+			failure := &store.Run{Agent: a.Name, Goal: pending.Goal, GoalHash: pending.GoalHash, AgentHash: a.Hash, Allocation: pending.Allocation, Status: "error", Error: verifyErr.Error(), VerificationBefore: verification, StartedAt: time.Now()}
+			if failure.Allocation == nil {
+				failure.Allocation = &store.Allocation{Reason: "approval preflight failed before admission"}
+			}
 			if err := s.SaveRun(failure); err != nil {
 				return err
+			}
+			if a.Notify != "" {
+				_ = runner.Notify(a.Notify, failure, "error")
 			}
 			return verifyErr
 		}
@@ -493,6 +510,15 @@ func validatePendingStrategy(pending *store.Run, a *agent.Agent) error {
 		return fmt.Errorf("run %s strategy changed: goal reference no longer matches the pending plan", pending.ID)
 	}
 	return nil
+}
+func scheduledAgents(agents []*portfolio.ResolvedAgent) []*portfolio.ResolvedAgent {
+	result := make([]*portfolio.ResolvedAgent, 0, len(agents))
+	for _, a := range agents {
+		if a.Agent.Schedule != "" {
+			result = append(result, a)
+		}
+	}
+	return result
 }
 func cmdReject(id string) error {
 	s := store.New(".")
@@ -665,7 +691,7 @@ func runIcon(status string) string {
 	case "incomplete":
 		return "!"
 	case "rejected", "superseded":
-		return "–"
+		return "-"
 	default:
 		return "✓"
 	}
