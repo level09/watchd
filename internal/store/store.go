@@ -69,7 +69,9 @@ type Store struct {
 func New(dir string) *Store { return &Store{dir: dir} }
 func (s *Store) SaveRun(run *Run) error {
 	runsDir := filepath.Join(s.dir, "runs")
-	os.MkdirAll(runsDir, 0755)
+	if err := os.MkdirAll(runsDir, 0755); err != nil {
+		return fmt.Errorf("create run ledger: %w", err)
+	}
 	if run.ID == "" {
 		run.ID = fmt.Sprintf("%s_%s", run.Agent, run.StartedAt.Format("2006-01-02_150405.000000000"))
 	}
@@ -77,7 +79,31 @@ func (s *Store) SaveRun(run *Run) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(runsDir, run.ID+".json"), data, 0644)
+	tmp, err := os.CreateTemp(runsDir, ".run-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary run file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0644); err != nil {
+		tmp.Close()
+		return fmt.Errorf("set temporary run file mode: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write run ledger: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync run ledger: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close run ledger: %w", err)
+	}
+	if err := os.Rename(tmpName, filepath.Join(runsDir, run.ID+".json")); err != nil {
+		return fmt.Errorf("commit run ledger: %w", err)
+	}
+	return nil
 }
 func (s *Store) GetRun(id string) (*Run, error) {
 	data, err := os.ReadFile(filepath.Join(s.dir, "runs", id+".json"))
@@ -105,6 +131,9 @@ func (s *Store) GetRuns(agentName string, limit int) ([]Run, error) {
 		if entry.IsDir() {
 			continue
 		}
+		if filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
 		if agentName != "" {
 			name := entry.Name()
 			if len(name) < len(agentName)+1 || name[:len(agentName)+1] != agentName+"_" {
@@ -113,11 +142,11 @@ func (s *Store) GetRuns(agentName string, limit int) ([]Run, error) {
 		}
 		data, err := os.ReadFile(filepath.Join(runsDir, entry.Name()))
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("read run %s: %w", entry.Name(), err)
 		}
 		var run Run
 		if err := json.Unmarshal(data, &run); err != nil {
-			continue
+			return nil, fmt.Errorf("parse run %s: %w", entry.Name(), err)
 		}
 		if run.ID == "" {
 			run.ID = strings.TrimSuffix(entry.Name(), ".json")

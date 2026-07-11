@@ -62,6 +62,7 @@ func Start(agentsDir string, s *store.Store) error {
 		fmt.Printf("  %s  %s\n", a.Name, a.Schedule)
 	}
 	entries := make([]entry, len(scheduled))
+	lastSkip := map[string]string{}
 	now := time.Now()
 	for i, a := range scheduled {
 		interval, err := parseInterval(a.Schedule)
@@ -77,22 +78,24 @@ func Start(agentsDir string, s *store.Store) error {
 	if policy == nil {
 		for _, a := range scheduled {
 			fmt.Printf("watchd: running %s...\n", a.Name)
-			run, _ := runner.Run(a, s)
+			run, err := runner.Run(a, s)
+			if err != nil {
+				return err
+			}
 			runner.PrintRun(run)
 		}
 	} else {
-		decisions, err := runPortfolioDue(now, *policy, goals, dueResolved(entries, now), s, printingRun(runner.RunResolved))
+		decisions, err := runPortfolioDueAt(time.Now, now, *policy, goals, dueResolved(entries, now), s, printingRun(runner.RunResolved))
 		if err != nil {
 			return err
 		}
 		advanceAdmitted(entries, decisions, now)
-		printDecisions(decisions, map[string]string{})
+		printDecisions(decisions, lastSkip)
 	}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	lastSkip := map[string]string{}
 	fmt.Println("watchd: waiting for schedules (ctrl+c to stop)")
 	for {
 		select {
@@ -101,7 +104,7 @@ func Start(agentsDir string, s *store.Store) error {
 			return nil
 		case now := <-ticker.C:
 			if policy != nil {
-				decisions, err := runPortfolioDue(now, *policy, goals, dueResolved(entries, now), s, printingRun(runner.RunResolved))
+				decisions, err := runPortfolioDueAt(time.Now, now, *policy, goals, dueResolved(entries, now), s, printingRun(runner.RunResolved))
 				if err != nil {
 					return err
 				}
@@ -114,7 +117,10 @@ func Start(agentsDir string, s *store.Store) error {
 					continue
 				}
 				fmt.Printf("watchd: running %s...\n", e.agent.Name)
-				run, _ := runner.Run(e.agent, s)
+				run, err := runner.Run(e.agent, s)
+				if err != nil {
+					return err
+				}
 				runner.PrintRun(run)
 				interval, _ := parseInterval(e.agent.Schedule)
 				entries[i].nextRun = now.Add(interval)
@@ -125,11 +131,17 @@ func Start(agentsDir string, s *store.Store) error {
 func printingRun(runFn portfolioRunFunc) portfolioRunFunc {
 	return func(agent *portfolio.ResolvedAgent, allocation *store.Allocation, s *store.Store) (*store.Run, error) {
 		run, err := runFn(agent, allocation, s)
-		runner.PrintRun(run)
+		if err == nil {
+			runner.PrintRun(run)
+		}
 		return run, err
 	}
 }
 func runPortfolioDue(now time.Time, policy portfolio.Policy, goals map[string]*portfolio.Goal, due []*portfolio.ResolvedAgent, s *store.Store, runFn portfolioRunFunc) ([]portfolio.Decision, error) {
+	return runPortfolioDueAt(func() time.Time { return now }, now, policy, goals, due, s, runFn)
+}
+func runPortfolioDueAt(clock func() time.Time, now time.Time, policy portfolio.Policy, goals map[string]*portfolio.Goal, due []*portfolio.ResolvedAgent, s *store.Store, runFn portfolioRunFunc) ([]portfolio.Decision, error) {
+	allDue := append([]*portfolio.ResolvedAgent(nil), due...)
 	remaining := append([]*portfolio.ResolvedAgent(nil), due...)
 	var admitted []portfolio.Decision
 	for len(remaining) > 0 {
@@ -137,20 +149,25 @@ func runPortfolioDue(now time.Time, policy portfolio.Policy, goals map[string]*p
 		if err != nil {
 			return nil, err
 		}
-		snapshot, err := portfolio.BuildSnapshot(now, policy, goals, remaining, runs)
+		snapshotNow := now
+		if len(admitted) > 0 {
+			snapshotNow = clock()
+		}
+		snapshot, err := portfolio.BuildSnapshot(snapshotNow, policy, goals, allDue, runs)
 		if err != nil {
 			return nil, err
 		}
-		decisions := portfolio.Decide(snapshot)
+		snapshot.Agents = remaining
+		candidateDecisions := portfolio.Decide(snapshot)
 		var next *portfolio.Decision
-		for i := range decisions {
-			if decisions[i].Admit {
-				next = &decisions[i]
+		for i := range candidateDecisions {
+			if candidateDecisions[i].Admit {
+				next = &candidateDecisions[i]
 				break
 			}
 		}
 		if next == nil {
-			return append(admitted, decisions...), nil
+			return append(admitted, candidateDecisions...), nil
 		}
 		allocation := &store.Allocation{
 			Score: next.Score, ReservedUSD: next.ReservedUSD, EstimatedCostUSD: next.EstimatedCostUSD,
@@ -161,13 +178,13 @@ func runPortfolioDue(now time.Time, policy portfolio.Policy, goals map[string]*p
 		}
 		admitted = append(admitted, *next)
 		name := next.Agent.Agent.Name
-		filtered := remaining[:0]
+		remainingFiltered := remaining[:0]
 		for _, candidate := range remaining {
 			if candidate.Agent.Name != name {
-				filtered = append(filtered, candidate)
+				remainingFiltered = append(remainingFiltered, candidate)
 			}
 		}
-		remaining = filtered
+		remaining = remainingFiltered
 	}
 	return admitted, nil
 }

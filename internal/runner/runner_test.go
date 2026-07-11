@@ -247,6 +247,52 @@ func TestApproveResolvedStoresAllocation(t *testing.T) {
 	}
 }
 
+func TestObserveRunRecordsPostVerificationOutcome(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	ready := filepath.Join(dir, "ready")
+	withFakeClaude(t, func(a *agent.Agent, prompt string, args []string) *store.Run {
+		if err := os.WriteFile(ready, []byte("ok"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		return successfulRun(a)
+	})
+	resolved := testResolved("observe", "test -f "+ready)
+	run, err := RunResolved(resolved, nil, store.New("."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "success" || run.VerificationAfter == nil || !run.VerificationAfter.Passed {
+		t.Fatalf("observe evidence = %+v", run)
+	}
+	if outcome := run.LatestOutcome(); outcome == nil || outcome.Value != "useful" {
+		t.Fatalf("observe outcome = %+v", outcome)
+	}
+}
+
+func TestApproveVerifierInfrastructureErrorPersistsEvidence(t *testing.T) {
+	t.Chdir(t.TempDir())
+	resolved := testResolved("propose", "command-that-does-not-exist-watchd")
+	pending := &store.Run{Agent: "repair", Goal: "product", Status: "pending", SessionID: "session", StartedAt: time.Now()}
+	s := store.New(".")
+	if err := s.SaveRun(pending); err != nil {
+		t.Fatal(err)
+	}
+	allocation := &store.Allocation{ReservedUSD: 0.2, Reason: "approved intervention"}
+	_, err := ApproveResolvedWithAllocation(resolved, allocation, pending, s)
+	if err == nil {
+		t.Fatal("expected verifier infrastructure error")
+	}
+	runs, loadErr := s.GetRuns("repair", 0)
+	if loadErr != nil || len(runs) != 2 {
+		t.Fatalf("persisted approval failure = %+v err=%v", runs, loadErr)
+	}
+	failure := runs[0]
+	if failure.Status != "error" || failure.Allocation == nil || failure.VerificationBefore == nil || failure.VerificationBefore.Error == "" {
+		t.Fatalf("approval failure evidence = %+v", failure)
+	}
+}
+
 func withFakeClaude(t *testing.T, fake func(*agent.Agent, string, []string) *store.Run) {
 	t.Helper()
 	old := invokeClaude

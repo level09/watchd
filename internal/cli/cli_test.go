@@ -106,6 +106,7 @@ schedule: 1h
 budget: 0.20
 ---
 Find weak documentation.`)
+	writeFile(t, "agents/edge-scout.md", "---\nname: edge-scout\n---\nResearch manually.")
 	s := store.New(".")
 	a, _ := loadAgent("alpha")
 	goals, _ := portfolio.DiscoverGoals("goals")
@@ -121,6 +122,9 @@ Find weak documentation.`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if strings.Contains(output, "edge-scout") {
+		t.Fatalf("manual legacy agent appeared in portfolio output: %q", output)
+	}
 	for _, want := range []string{"remaining $0.9500", "product", "alpha", "beta", "1 useful", "$0.0500/useful", "1 rated", "$0.0500", "highest verified return"} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("portfolio output missing %q: %s", want, output)
@@ -135,9 +139,11 @@ func TestListShowsGoal(t *testing.T) {
 	writeFile(t, "agents/scan.md", `---
 name: scan
 goal: product
+schedule: 1h
 budget: 0.10
 ---
 Scan.`)
+	writeFile(t, "agents/edge-scout.md", "---\nname: edge-scout\n---\nResearch manually.")
 	output, err := captureOutput(t, func() error { return Run([]string{"list"}) })
 	if err != nil {
 		t.Fatal(err)
@@ -197,12 +203,69 @@ func TestApprovalUsesPortfolioAdmission(t *testing.T) {
 	writeFile(t, "goals/product.md", "---\nname: product\nauthority: propose\n---\nShip useful software.")
 	writeFile(t, "agents/repair.md", "---\nname: repair\ngoal: product\nbudget: 0.20\n---\nRepair.")
 	s := store.New(".")
-	pending := &store.Run{Agent: "repair", Goal: "product", GoalHash: "g", AgentHash: "a", Status: "pending", SessionID: "session", StartedAt: time.Now()}
+	pending := &store.Run{Agent: "repair", Goal: "product", Status: "pending", SessionID: "session", StartedAt: time.Now()}
 	if err := s.SaveRun(pending); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := captureOutput(t, func() error { return Run([]string{"approve", pending.ID}) }); err == nil || !strings.Contains(err.Error(), "budget") {
 		t.Fatalf("expected approval budget error, got %v", err)
+	}
+}
+
+func TestApprovalSupersedesRecoveredGoalBeforeBudgetAdmission(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	ready := filepath.Join(dir, "ready")
+	if err := os.WriteFile(ready, []byte("ok"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, "watchd.yaml", "daily_budget: 0.01\n")
+	writeFile(t, "goals/product.md", "---\nname: product\nauthority: propose\n---\nShip useful software.")
+	writeFile(t, "agents/repair.md", "---\nname: repair\ngoal: product\nbudget: 0.20\nverify: test -f "+ready+"\n---\nRepair.")
+	pending := &store.Run{Agent: "repair", Goal: "product", Status: "pending", SessionID: "session", StartedAt: time.Now()}
+	if err := store.New(".").SaveRun(pending); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := captureOutput(t, func() error { return Run([]string{"approve", pending.ID}) }); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.New(".").GetRun(pending.ID)
+	if err != nil || got.Status != "superseded" || got.VerificationAfter == nil || !got.VerificationAfter.Passed {
+		t.Fatalf("pending after approval = %+v err=%v", got, err)
+	}
+}
+
+func TestApprovalRejectsChangedStrategy(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeFile(t, "watchd.yaml", "daily_budget: 1.00\n")
+	writeFile(t, "goals/product.md", "---\nname: product\nauthority: propose\n---\nShip useful software.")
+	writeFile(t, "agents/repair.md", "---\nname: repair\ngoal: product\nbudget: 0.20\n---\nNew instructions.")
+	pending := &store.Run{Agent: "repair", Goal: "product", AgentHash: "old-agent", GoalHash: "old-goal", Status: "pending", SessionID: "session", StartedAt: time.Now()}
+	if err := store.New(".").SaveRun(pending); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := captureOutput(t, func() error { return Run([]string{"approve", pending.ID}) }); err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatalf("expected changed strategy error, got %v", err)
+	}
+	got, _ := store.New(".").GetRun(pending.ID)
+	if got.Status != "pending" {
+		t.Fatalf("stale pending status = %q", got.Status)
+	}
+}
+
+func TestApprovalCannotPromoteObserveGoalToAction(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeFile(t, "watchd.yaml", "daily_budget: 1.00\n")
+	writeFile(t, "goals/health.md", "---\nname: health\nauthority: observe\n---\nObserve health safely.")
+	writeFile(t, "agents/health.md", "---\nname: health\ngoal: health\nbudget: 0.20\n---\nObserve.")
+	pending := &store.Run{Agent: "health", Goal: "health", Status: "pending", SessionID: "session", StartedAt: time.Now()}
+	if err := store.New(".").SaveRun(pending); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := captureOutput(t, func() error { return Run([]string{"approve", pending.ID}) }); err == nil || !strings.Contains(err.Error(), "observe") {
+		t.Fatalf("expected observe authority error, got %v", err)
 	}
 }
 

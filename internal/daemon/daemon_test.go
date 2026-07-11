@@ -30,6 +30,23 @@ func TestPrintingRunShowsPortfolioResult(t *testing.T) {
 	}
 }
 
+func TestPrintingRunDoesNotHidePersistenceError(t *testing.T) {
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	t.Cleanup(func() { os.Stdout = old })
+	wantErr := os.ErrClosed
+	runFn := printingRun(func(*portfolio.ResolvedAgent, *store.Allocation, *store.Store) (*store.Run, error) {
+		return &store.Run{Agent: "scan", Status: "error"}, wantErr
+	})
+	_, err := runFn(nil, nil, nil)
+	w.Close()
+	output, _ := io.ReadAll(r)
+	if err != wantErr || len(output) != 0 {
+		t.Fatalf("err=%v output=%q", err, output)
+	}
+}
+
 func TestRunPortfolioDueUsesScoreOrderAndActualSpend(t *testing.T) {
 	now := time.Date(2026, 7, 10, 9, 0, 0, 0, time.Local)
 	goal := &portfolio.Goal{Name: "product", Weight: 1, Authority: "act", Hash: "g1"}
@@ -122,6 +139,30 @@ func TestRunPortfolioDueResetsBudgetNextDay(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatal("agent did not run after day rollover")
+	}
+}
+
+func TestRunPortfolioDueRefreshesClockBetweenAdmissions(t *testing.T) {
+	start := time.Date(2026, 7, 10, 23, 59, 0, 0, time.Local)
+	nextDay := start.Add(2 * time.Minute)
+	goal := &portfolio.Goal{Name: "product", Weight: 1, Authority: "act", Hash: "g1"}
+	first := daemonAgent("first", "a1", 0.10, goal)
+	second := daemonAgent("second", "a2", 0.10, goal)
+	s := store.New(t.TempDir())
+	clock := start
+	calls := 0
+	runFn := func(resolved *portfolio.ResolvedAgent, allocation *store.Allocation, s *store.Store) (*store.Run, error) {
+		calls++
+		runAt := clock
+		if calls == 1 {
+			clock = nextDay
+		}
+		run := &store.Run{Agent: resolved.Agent.Name, Goal: goal.Name, GoalHash: goal.Hash, AgentHash: resolved.Agent.Hash, Status: "success", CostUSD: 0.10, StartedAt: runAt, Allocation: allocation, OutcomeRatings: []store.OutcomeRating{{Value: "useful", Source: "verify", RatedAt: runAt}}}
+		return run, s.SaveRun(run)
+	}
+	decisions, err := runPortfolioDueAt(func() time.Time { return clock }, start, portfolio.Policy{DailyBudget: 0.10, Exploration: 0, MaxUnrated: 5, MaxPending: 3}, map[string]*portfolio.Goal{"product": goal}, []*portfolio.ResolvedAgent{first, second}, s, runFn)
+	if err != nil || calls != 2 {
+		t.Fatalf("clock rollover calls=%d decisions=%+v err=%v", calls, decisions, err)
 	}
 }
 
