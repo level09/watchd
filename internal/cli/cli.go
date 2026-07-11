@@ -12,11 +12,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
-const version = "1.2.1"
+const version = "1.3.0"
 const agentsDir = "agents"
 
 //go:embed help.txt
@@ -65,6 +67,8 @@ func Run(args []string) error {
 		return oneArg(args, "watchd reject <run-id>", cmdReject)
 	case "up":
 		return cmdUp()
+	case "stop":
+		return cmdStop()
 	case "edit":
 		return oneArg(args, "watchd edit <name>", cmdEdit)
 	case "version", "--version", "-v":
@@ -647,7 +651,44 @@ func admitAgent(a *agent.Agent, approval bool) (*portfolio.ResolvedAgent, *store
 	}
 	return resolved, allocation, nil
 }
-func cmdUp() error { return daemon.Start(agentsDir, store.New(".")) }
+const pidFile = ".watchd.pid"
+
+func cmdUp() error {
+	if pid, running := schedulerPID(); running {
+		return fmt.Errorf("scheduler already running (pid %d); watchd stop to end it", pid)
+	}
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
+		return err
+	}
+	defer os.Remove(pidFile)
+	return daemon.Start(agentsDir, store.New("."))
+}
+func cmdStop() error {
+	pid, running := schedulerPID()
+	if !running {
+		fmt.Println("scheduler not running in this directory")
+		return nil
+	}
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		return err
+	}
+	os.Remove(pidFile)
+	fmt.Printf("scheduler stopped (pid %d)\n", pid)
+	return nil
+}
+
+// stale pidfiles (e.g. after Ctrl-C) are harmless: liveness is checked via signal 0
+func schedulerPID() (int, bool) {
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 || syscall.Kill(pid, 0) != nil {
+		return 0, false
+	}
+	return pid, true
+}
 func cmdEdit(name string) error {
 	path := filepath.Join(agentsDir, name+".md")
 	if _, err := os.Stat(path); err != nil {
