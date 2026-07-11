@@ -318,3 +318,12 @@ func containsArg(args []string, value string) bool {
 	}
 	return false
 }
+
+func TestSystemPromptNamesAllowedTools(t *testing.T) {
+	a := &agent.Agent{Name: "x", Model: "haiku"}
+	args := commonArgs(a, []string{"Read", "WebFetch"})
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "Your only available tools: Read, WebFetch") {
+		t.Fatalf("system prompt missing tool list: %q", joined)
+	}
+}

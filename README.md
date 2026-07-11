@@ -357,7 +357,7 @@ On top of that, cron gives you none of the operational layer: no cost tracking, 
 | `name` | filename | Agent identifier |
 | `schedule` | none | Interval: `30s`, `5m`, `2h`, `1d` (empty = manual only) |
 | `model` | `sonnet` | Claude model (`haiku` for cheap high-frequency loops) |
-| `budget` | none | Max cost per run in USD, enforced mid-run. A run has ~$0.05 of fixed CLI overhead, so keep budgets at `0.10` or above |
+| `budget` | none | Max cost per run in USD, enforced mid-run. A run has ~$0.05 of fixed CLI overhead, so keep budgets at `0.10` or above; web-research agents on sonnet need `0.30`+ |
 | `memory` | `false` | Curated memory file, injected and rewritten every run |
 | `gate` | `false` | Read-only dry run, execute only after approval |
 | `notify` | none | Shell command fired on pending, error, incomplete, or harmful |
