@@ -1,7 +1,7 @@
 # Watchd v1.1: Adaptive Outcome Portfolio
 
 Date: 2026-07-10
-Status: Approved design
+Status: Implemented in v1.1.0
 
 ## Product decision
 
@@ -28,9 +28,10 @@ The release remains a local Go CLI wrapping `claude -p` and using plain files.
 It adds no database, web interface, multi-provider abstraction, swarm runtime,
 vector store, background prompt mutation, or general workflow language.
 
-Production code stays below 2,000 lines. The current production core is 1,164
-lines, leaving roughly 800 lines for goal parsing, allocation, verification,
-outcome recording, and CLI changes.
+Production code stays below 2,200 lines. The initial estimate was based on the
+v1.0 core; the release spends the additional budget on fail-closed ledger
+reads, atomic persistence, stale-plan rejection, and explicit verifier
+evidence rather than adding a new runtime dependency or service.
 
 The first release uses transparent deterministic allocation. Reinforcement
 learning, counterfactual credit assignment, and automatic skill evolution are
@@ -515,7 +516,8 @@ without calling an external model.
 - Identical state produces identical decisions.
 - Legacy behavior remains unchanged when portfolio configuration is absent.
 - The binary gains no runtime dependency beyond the existing Claude CLI.
-- Production code remains below 2,000 lines.
+- Production code remains below 2,200 lines, including the safety hardening
+  required for atomic ledger writes and stale approval rejection.
 - Tests, vet, build, and the local smoke test pass.
 
 ## Deferred work
