@@ -13,6 +13,7 @@ commands:
   portfolio     show allocation, budget, and review debt
   outcome <id> useful|neutral|harmful [note]
                 record whether a run created value
+  rate          triage unrated runs, one keypress each
   check <name>  run an agent's verifier without Claude
   pending       list gated runs awaiting approval
   approve <id>  execute a pending run's plan

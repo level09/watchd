@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	_ "embed"
 	"fmt"
 	"github.com/level09/watchd/internal/agent"
@@ -15,7 +16,7 @@ import (
 	"time"
 )
 
-const version = "1.1.0"
+const version = "1.2.0"
 const agentsDir = "agents"
 
 //go:embed help.txt
@@ -52,6 +53,8 @@ func Run(args []string) error {
 			return fmt.Errorf("usage: watchd outcome <run-id> useful|neutral|harmful [note]")
 		}
 		return cmdOutcome(args[1], args[2], strings.Join(args[3:], " "))
+	case "rate":
+		return cmdRate()
 	case "check":
 		return oneArg(args, "watchd check <agent>", cmdCheck)
 	case "pending":
@@ -183,6 +186,48 @@ func cmdOutcome(id, value, note string) error {
 		}
 	}
 	fmt.Printf("rated %s %s\n", run.ID, value)
+	return nil
+}
+func cmdRate() error {
+	runs, err := store.New(".").GetRuns("", 0)
+	if err != nil {
+		return err
+	}
+	var unrated []store.Run
+	for _, r := range runs {
+		if r.Status == "success" && r.LatestOutcome() == nil {
+			unrated = append(unrated, r)
+		}
+	}
+	if len(unrated) == 0 {
+		fmt.Println("nothing unrated. the ledger is clean.")
+		return nil
+	}
+	values := map[string]string{"u": "useful", "n": "neutral", "h": "harmful"}
+	reader := bufio.NewReader(os.Stdin)
+	rated := 0
+	for i, r := range unrated {
+		fmt.Printf("\n[%d/%d] %s  $%.4f  %s\n", i+1, len(unrated), r.Agent, r.CostUSD, relativeTime(r.StartedAt))
+		fmt.Printf("  %s\n", truncate(r.Result, 500))
+		fmt.Print("  [u]seful [n]eutral [h]armful [s]kip [q]uit, note after value: ")
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			break
+		}
+		key, note, _ := strings.Cut(strings.TrimSpace(line), " ")
+		if key == "q" {
+			break
+		}
+		value, ok := values[key]
+		if !ok {
+			continue
+		}
+		if err := cmdOutcome(r.ID, value, note); err != nil {
+			return err
+		}
+		rated++
+	}
+	fmt.Printf("\nrated %d of %d\n", rated, len(unrated))
 	return nil
 }
 func cmdCheck(name string) error {

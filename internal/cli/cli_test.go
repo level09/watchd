@@ -347,3 +347,53 @@ func writeFile(t *testing.T, name, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestRateTriagesUnratedRuns(t *testing.T) {
+	t.Chdir(t.TempDir())
+	s := store.New(".")
+	first := &store.Run{Agent: "scan", Status: "success", Result: "found a thing", StartedAt: time.Now().Add(-time.Hour)}
+	second := &store.Run{Agent: "scan", Status: "success", Result: "found nothing", StartedAt: time.Now().Add(-time.Minute)}
+	rated := &store.Run{Agent: "scan", Status: "success", StartedAt: time.Now(),
+		OutcomeRatings: []store.OutcomeRating{{Value: "useful", Source: "human", RatedAt: time.Now()}}}
+	for _, run := range []*store.Run{first, second, rated} {
+		if err := s.SaveRun(run); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.WriteString("u exposed a move\ns\n"); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	oldStdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
+
+	out, err := captureOutput(t, func() error { return Run([]string{"rate"}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "rated 1 of 2") {
+		t.Fatalf("output = %q", out)
+	}
+	ratedRuns := 0
+	for _, id := range []string{first.ID, second.ID} {
+		got, err := s.GetRun(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if latest := got.LatestOutcome(); latest != nil {
+			if latest.Value != "useful" || latest.Note != "exposed a move" {
+				t.Fatalf("outcome = %+v", latest)
+			}
+			ratedRuns++
+		}
+	}
+	if ratedRuns != 1 {
+		t.Fatalf("rated %d runs, want 1", ratedRuns)
+	}
+}
