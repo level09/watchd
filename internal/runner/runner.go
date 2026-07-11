@@ -234,19 +234,21 @@ func verifiedOutcome(value string) store.OutcomeRating {
 	return store.OutcomeRating{Value: value, Source: "verify", RatedAt: time.Now()}
 }
 func commonArgs(a *agent.Agent, tools []string) []string {
+	if len(tools) == 0 {
+		tools = []string{"Bash", "Read", "Write", "Glob", "Grep", "WebSearch", "WebFetch"}
+	}
 	args := []string{
 		"--output-format", "json",
 		"--model", a.Model,
-		"--append-system-prompt", systemPrompt,
+		"--append-system-prompt", systemPrompt + " Your only available tools: " +
+			strings.Join(tools, ", ") + ". Any other tool call blocks on a permission " +
+			"prompt no one can answer and wastes the budget; work within this set.",
 	}
 	if a.MaxTurns > 0 {
 		args = append(args, "--max-turns", fmt.Sprintf("%d", a.MaxTurns))
 	}
 	if a.Budget > 0 {
 		args = append(args, "--max-budget-usd", fmt.Sprintf("%.2f", a.Budget))
-	}
-	if len(tools) == 0 {
-		tools = []string{"Bash", "Read", "Write", "Glob", "Grep", "WebSearch", "WebFetch"}
 	}
 	for _, tool := range tools {
 		args = append(args, "--allowedTools", tool)
