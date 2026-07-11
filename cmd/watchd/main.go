@@ -2,9 +2,8 @@ package main
 
 import (
 	"fmt"
-	"os"
-
 	"github.com/level09/watchd/internal/cli"
+	"os"
 )
 
 func main() {
