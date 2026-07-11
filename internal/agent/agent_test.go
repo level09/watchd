@@ -64,6 +64,8 @@ func TestRejectInvalidVerifierConfiguration(t *testing.T) {
 		{name: "invalid timeout", yaml: "goal: product\nverify: true\nverify_timeout: soon"},
 		{name: "zero timeout", yaml: "goal: product\nverify: true\nverify_timeout: 0s"},
 		{name: "negative timeout", yaml: "goal: product\nverify: true\nverify_timeout: -1s"},
+		{name: "invalid budget", yaml: "budget: .nan"},
+		{name: "negative budget", yaml: "budget: -0.10"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

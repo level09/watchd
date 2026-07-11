@@ -407,7 +407,7 @@ func runIcon(status string) string {
 	case "incomplete":
 		return "!"
 	case "rejected", "superseded":
-		return "–"
+		return "-"
 	default:
 		return "✓"
 	}

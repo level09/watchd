@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"gopkg.in/yaml.v3"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,6 +61,9 @@ func Load(path string) (*Agent, error) {
 	return agent, nil
 }
 func (a *Agent) validate() error {
+	if a.Budget < 0 || math.IsNaN(a.Budget) || math.IsInf(a.Budget, 0) {
+		return fmt.Errorf("budget must be zero or a positive finite number")
+	}
 	if a.Verify != "" && a.Goal == "" {
 		return fmt.Errorf("verify requires goal")
 	}

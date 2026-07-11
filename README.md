@@ -117,6 +117,8 @@ rated competitor_... useful
 Useful results raise future allocation. Neutral and harmful results lower it.
 New agents retain bounded exploration so a successful incumbent does not own
 the budget forever. Identical state always produces the same decision.
+Agents without a schedule remain manual-only; they do not consume scheduled
+portfolio capacity.
 
 No model judges the portfolio. The formula and every admission reason are
 stored and inspectable.

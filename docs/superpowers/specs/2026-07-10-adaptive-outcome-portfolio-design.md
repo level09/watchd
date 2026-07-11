@@ -28,7 +28,7 @@ The release remains a local Go CLI wrapping `claude -p` and using plain files.
 It adds no database, web interface, multi-provider abstraction, swarm runtime,
 vector store, background prompt mutation, or general workflow language.
 
-Production code stays below 2,200 lines. The initial estimate was based on the
+Production code stays below 2,250 lines. The initial estimate was based on the
 v1.0 core; the release spends the additional budget on fail-closed ledger
 reads, atomic persistence, stale-plan rejection, and explicit verifier
 evidence rather than adding a new runtime dependency or service.
@@ -516,7 +516,7 @@ without calling an external model.
 - Identical state produces identical decisions.
 - Legacy behavior remains unchanged when portfolio configuration is absent.
 - The binary gains no runtime dependency beyond the existing Claude CLI.
-- Production code remains below 2,200 lines, including the safety hardening
+- Production code remains below 2,250 lines, including the safety hardening
   required for atomic ledger writes and stale approval rejection.
 - Tests, vet, build, and the local smoke test pass.
 

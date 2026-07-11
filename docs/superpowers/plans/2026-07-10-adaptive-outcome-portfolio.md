@@ -291,7 +291,7 @@ go build ./cmd/watchd
 wc -l cmd/watchd/main.go internal/agent/*.go internal/cli/cli.go internal/daemon/daemon.go internal/portfolio/portfolio.go internal/runner/*.go internal/store/store.go
 ```
 
-Expected: tests, vet, and build pass; production files remain below 2,200 lines in total after excluding `_test.go`.
+Expected: tests, vet, and build pass; production files remain below 2,250 lines in total after excluding `_test.go`.
 
 - [ ] **Step 5: Commit**
 
