@@ -5,8 +5,10 @@ Fund the loops that prove they help.
 Your goals and agents are markdown files. watchd decides which due agents deserve a finite daily budget, runs them with `claude -p`, records whether they helped, and shifts future spend toward verified value. Anything dangerous still waits for approval. One Go binary. Plain files.
 
 ```bash
-go install github.com/level09/watchd/cmd/watchd@latest
+curl -fsSL https://watchd.dev/install.sh | sh
 ```
+
+Or with Go 1.25+: `go install github.com/level09/watchd/cmd/watchd@latest`
 
 ## The short version
 
@@ -220,6 +222,20 @@ watchd outcome <run-id> neutral
 watchd outcome <run-id> harmful "created unsafe advice"
 ```
 
+Or triage everything unrated in one pass, one keypress per run:
+
+```text
+$ watchd rate
+
+[1/2] competitor  $0.0410  6h ago
+  Acme cut Pro pricing 20%. Second cut this quarter.
+  [u]seful [n]eutral [h]armful [s]kip [q]uit, note after value: u price war signal
+rated competitor_2026-07-11_041500 useful
+```
+
+The allocator holds an agent while it has unrated output, so rating throughput
+is the market's liquidity. `watchd rate` keeps it a thirty-second ritual.
+
 Ratings append to history rather than overwriting it. Your corrections remain
 auditable and become the portfolio's compounding asset.
 
@@ -328,6 +344,7 @@ On top of that, cron gives you none of the operational layer: no cost tracking, 
 | `watchd costs` | Spend per agent |
 | `watchd portfolio` | Budget, review debt, scores, and admission reasons |
 | `watchd outcome <id> <value> [note]` | Record useful, neutral, or harmful value |
+| `watchd rate` | Triage unrated runs, one keypress each |
 | `watchd check <name>` | Run only an agent's verifier |
 | `watchd pending` | Gated runs awaiting approval |
 | `watchd approve <id>` | Execute a pending plan |
@@ -354,7 +371,7 @@ On top of that, cron gives you none of the operational layer: no cost tracking, 
 
 ## Under the hood
 
-watchd is a small orchestration layer under 2,250 lines of Go. No AI runtime,
+watchd is a small orchestration layer, about 2,600 lines of Go. No AI runtime,
 database, or API keys to manage. It spawns `claude -p`, parses JSON output, and
 records cost, evidence, allocation, outcomes, and instruction hashes.
 
