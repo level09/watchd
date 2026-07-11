@@ -8,6 +8,68 @@ Your goals and agents are markdown files. watchd decides which due agents deserv
 go install github.com/level09/watchd/cmd/watchd@latest
 ```
 
+## The short version
+
+watchd runs small AI jobs on a schedule, remembers what happened, and spends
+your AI budget on the jobs that prove useful. You write plain Markdown; watchd
+handles the schedule, cost limit, memory, evidence, and approval gate.
+
+Think of it as four pieces:
+
+1. **Agent** — what to inspect or do (`agents/*.md`).
+2. **Goal** — why it matters (`goals/*.md`).
+3. **Policy** — how much money and review time is available (`watchd.yaml`).
+4. **Outcome** — whether the run helped: `useful`, `neutral`, or `harmful`.
+
+If you only want one job, use an agent by itself. If you have several jobs,
+add a portfolio so watchd can choose which due job deserves the next dollar.
+
+### Simplest useful setup
+
+```bash
+watchd init
+watchd run example       # try one agent now
+watchd logs              # inspect the result
+watchd up                # keep scheduled agents running
+```
+
+For a portfolio, create these two small files:
+
+`watchd.yaml`
+
+```yaml
+daily_budget: 1.00
+```
+
+`goals/product.md`
+
+```markdown
+---
+name: product
+authority: propose
+---
+Keep the product useful and releasable.
+```
+
+Then attach an agent to that goal:
+
+```markdown
+---
+name: repo-health
+goal: product
+schedule: 6h
+budget: 0.20
+---
+Find one important problem and explain the smallest safe fix.
+```
+
+```bash
+watchd portfolio                  # see who is eligible
+watchd outcome <run-id> useful    # teach watchd what helped
+watchd pending                    # see plans waiting for you
+watchd approve <run-id>           # allow a proposed action
+```
+
 ## One night
 
 ```
@@ -292,7 +354,7 @@ On top of that, cron gives you none of the operational layer: no cost tracking, 
 
 ## Under the hood
 
-watchd is a thin orchestration layer under 2,000 lines of Go. No AI runtime,
+watchd is a small orchestration layer under 2,250 lines of Go. No AI runtime,
 database, or API keys to manage. It spawns `claude -p`, parses JSON output, and
 records cost, evidence, allocation, outcomes, and instruction hashes.
 
