@@ -340,6 +340,7 @@ On top of that, cron gives you none of the operational layer: no cost tracking, 
 | `watchd edit <name>` | Open agent in `$EDITOR` |
 | `watchd run <name>` | Run an agent once |
 | `watchd up` | Start the scheduler |
+| `watchd stop` | Stop the scheduler started in this directory |
 | `watchd logs [name]` | Run history |
 | `watchd costs` | Spend per agent |
 | `watchd portfolio` | Budget, review debt, scores, and admission reasons |

@@ -19,5 +19,6 @@ commands:
   approve <id>  execute a pending run's plan
   reject <id>   discard a pending run
   up            start scheduler (run eligible agents)
+  stop          stop the scheduler started in this directory
   help          show this help
   version       show version
