@@ -49,6 +49,16 @@ func TestSnapshotNamesInvalidAgentFile(t *testing.T) {
 	}
 }
 
+func TestSnapshotRejectsPortfolioUntilPortfolioConversionExists(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "watchd.yaml", "daily_budget: 1\n")
+
+	_, err := Snapshot(root, time.Now())
+	if err == nil || !strings.Contains(err.Error(), "portfolio snapshots are not available") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestSnapshotLimitsRecentRuns(t *testing.T) {
 	root := t.TempDir()
 	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
