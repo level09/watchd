@@ -51,6 +51,19 @@ func TestSnapshotNamesInvalidAgentFile(t *testing.T) {
 	}
 }
 
+func TestSnapshotNamesScheduledAgentWithoutGoalFile(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "watchd.yaml", "daily_budget: 1\n")
+	writeFixture(t, root, "goals/product.md", "---\nname: product\n---\nShip.")
+	writeFixture(t, root, "agents/scheduled.md", "---\nname: scheduled\nschedule: 1h\n---\nRun.")
+
+	_, err := Snapshot(root, time.Now())
+	path := filepath.Join(root, "agents", "scheduled.md")
+	if err == nil || !strings.Contains(err.Error(), path) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestSnapshotPortfolioPreservesAllocation(t *testing.T) {
 	root := t.TempDir()
 	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)

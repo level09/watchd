@@ -48,7 +48,7 @@ func portfolioSnapshot(root string, now time.Time, policy portfolio.Policy, agen
 	for _, item := range agents {
 		if item.Goal == "" {
 			if item.Schedule != "" {
-				return SnapshotView{}, fmt.Errorf("agent %q has no goal in portfolio mode", item.Name)
+				return SnapshotView{}, fmt.Errorf("agent %q at %s has no goal in portfolio mode", item.Name, item.FilePath)
 			}
 			continue
 		}

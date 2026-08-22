@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,6 +97,19 @@ func TestDiscoverGoalsReportsAllInvalidFiles(t *testing.T) {
 	writeGoal(t, dir, "bad-authority.md", "---\nauthority: dream\n---\nGoal")
 	if _, err := DiscoverGoals(dir); err == nil {
 		t.Fatal("expected discovery error")
+	}
+}
+
+func TestDiscoverGoalsNamesBothDuplicateFiles(t *testing.T) {
+	dir := t.TempDir()
+	writeGoal(t, dir, "alpha.md", "---\nname: product\n---\nShip.")
+	writeGoal(t, dir, "beta.md", "---\nname: product\n---\nShip too.")
+
+	_, err := DiscoverGoals(dir)
+	first := filepath.Join(dir, "alpha.md")
+	second := filepath.Join(dir, "beta.md")
+	if err == nil || !strings.Contains(err.Error(), first) || !strings.Contains(err.Error(), second) {
+		t.Fatalf("error = %v", err)
 	}
 }
 
