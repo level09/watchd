@@ -18,10 +18,10 @@ handles the schedule, cost limit, memory, evidence, and approval gate.
 
 Think of it as four pieces:
 
-1. **Agent** — what to inspect or do (`agents/*.md`).
-2. **Goal** — why it matters (`goals/*.md`).
-3. **Policy** — how much money and review time is available (`watchd.yaml`).
-4. **Outcome** — whether the run helped: `useful`, `neutral`, or `harmful`.
+1. **Agent**: what to inspect or do (`agents/*.md`).
+2. **Goal**: why it matters (`goals/*.md`).
+3. **Policy**: how much money and review time is available (`watchd.yaml`).
+4. **Outcome**: whether the run helped: `useful`, `neutral`, or `harmful`.
 
 If you only want one job, use an agent by itself. If you have several jobs,
 add a portfolio so watchd can choose which due job deserves the next dollar.
@@ -71,6 +71,13 @@ watchd outcome <run-id> useful    # teach watchd what helped
 watchd pending                    # see plans waiting for you
 watchd approve <run-id>           # allow a proposed action
 ```
+
+## Local dashboard
+
+Run `watchd serve`, then open `http://127.0.0.1:7337`. The read-only dashboard
+shows goals, agents, allocation decisions, review debt, spend, and recent
+outcomes. It binds only to the local machine. Existing files remain the source
+of truth.
 
 ## One night
 
@@ -339,6 +346,7 @@ On top of that, cron gives you none of the operational layer: no cost tracking, 
 | `watchd add <name>` | Scaffold a new agent |
 | `watchd edit <name>` | Open agent in `$EDITOR` |
 | `watchd run <name>` | Run an agent once |
+| `watchd serve [--addr ADDRESS]` | Start the local read-only dashboard |
 | `watchd up` | Start the scheduler |
 | `watchd stop` | Stop the scheduler started in this directory |
 | `watchd logs [name]` | Run history |
@@ -379,11 +387,13 @@ records cost, evidence, allocation, outcomes, and instruction hashes.
 ```
 cmd/watchd          entry point, one binary, no runtime deps
 internal/cli        all commands
+internal/app        dashboard snapshot builder
 internal/agent      markdown + YAML frontmatter parsing
 internal/portfolio  goals, policy, review limits, and deterministic allocation
 internal/runner     spawns claude -p, memory, gate, notify
 internal/store      run history as JSON files with provenance
 internal/daemon     scheduler loop
+internal/server     local dashboard HTTP server
 ```
 
 Requires Go 1.25+ and an authenticated [Claude Code](https://claude.com/claude-code) CLI.

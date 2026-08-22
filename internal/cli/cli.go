@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	_ "embed"
 	"fmt"
 	"github.com/level09/watchd/internal/agent"
@@ -9,9 +10,11 @@ import (
 	"github.com/level09/watchd/internal/daemon"
 	"github.com/level09/watchd/internal/portfolio"
 	"github.com/level09/watchd/internal/runner"
+	"github.com/level09/watchd/internal/server"
 	"github.com/level09/watchd/internal/store"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -70,6 +73,8 @@ func Run(args []string) error {
 		return cmdUp()
 	case "stop":
 		return cmdStop()
+	case "serve":
+		return cmdServe(args[1:])
 	case "edit":
 		return oneArg(args, "watchd edit <name>", cmdEdit)
 	case "version", "--version", "-v":
@@ -82,6 +87,26 @@ func Run(args []string) error {
 		return fmt.Errorf("unknown command: %s (try watchd help)", args[0])
 	}
 }
+
+func cmdServe(args []string) error {
+	addr := "127.0.0.1:7337"
+	switch {
+	case len(args) == 0:
+	case len(args) == 2 && args[0] == "--addr":
+		addr = args[1]
+	default:
+		return fmt.Errorf("usage: watchd serve [--addr 127.0.0.1:7337]")
+	}
+	instance, err := server.New(".", addr, time.Now)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	fmt.Printf("watchd: dashboard http://%s\n", instance.Addr())
+	return instance.Serve(ctx)
+}
+
 func oneArg(args []string, usage string, command func(string) error) error {
 	if len(args) < 2 {
 		return fmt.Errorf("usage: %s", usage)

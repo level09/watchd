@@ -2,6 +2,7 @@ package cli
 
 import (
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,36 @@ import (
 	"github.com/level09/watchd/internal/portfolio"
 	"github.com/level09/watchd/internal/store"
 )
+
+func TestServeRejectsInvalidArguments(t *testing.T) {
+	for _, args := range [][]string{
+		{"serve", "extra"},
+		{"serve", "--addr"},
+		{"serve", "--port", "127.0.0.1:7337"},
+		{"serve", "--addr", "0.0.0.0:7337"},
+	} {
+		if err := Run(args); err == nil {
+			t.Fatalf("Run(%q) returned nil", args)
+		}
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	err = Run([]string{"serve", "--addr", listener.Addr().String()})
+	if err == nil || !strings.Contains(err.Error(), "listen") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestHelpDocumentsServe(t *testing.T) {
+	if !strings.Contains(helpText, "serve [--addr") {
+		t.Fatalf("help = %q", helpText)
+	}
+}
 
 func TestOutcomeCommandAppendsRating(t *testing.T) {
 	t.Chdir(t.TempDir())
