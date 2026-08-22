@@ -7,7 +7,19 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <main id="app">Loading watchd...</main>
+  <header class="masthead">
+    <div><span class="mark">watchd</span><span id="mode" class="mode"></span></div>
+    <div><span id="error" role="alert"></span><span id="freshness">Loading...</span></div>
+  </header>
+  <main>
+    <section id="summary" class="summary" aria-label="Portfolio summary"></section>
+    <section class="panel"><h1>Goals</h1><div id="goals" class="cards"></div></section>
+    <section class="panel">
+      <h1>Agents</h1>
+      <div class="table-wrap"><table><thead><tr><th>Agent</th><th>Goal</th><th>Schedule</th><th>Authority</th><th>Budget</th><th>Score</th><th>Decision</th><th>Last run</th></tr></thead><tbody id="agents"></tbody></table></div>
+    </section>
+    <section class="panel"><h1>Recent activity</h1><div id="activity" class="activity"></div></section>
+  </main>
   <script type="module" src="/app.js"></script>
 </body>
 </html>
