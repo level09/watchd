@@ -33,7 +33,115 @@ func Snapshot(root string, now time.Time) (SnapshotView, error) {
 	if policy == nil {
 		return legacySnapshot(now, agents, runs), nil
 	}
-	return SnapshotView{}, fmt.Errorf("portfolio snapshots are not available")
+	return portfolioSnapshot(root, now, *policy, agents, runs)
+}
+
+func portfolioSnapshot(root string, now time.Time, policy portfolio.Policy, agents []*agent.Agent, runs []store.Run) (SnapshotView, error) {
+	goalsPath := filepath.Join(root, "goals")
+	goals, err := portfolio.DiscoverGoals(goalsPath)
+	if err != nil {
+		return SnapshotView{}, fmt.Errorf("load %s: %w", goalsPath, err)
+	}
+
+	resolvedByName := make(map[string]*portfolio.ResolvedAgent)
+	var scheduled []*portfolio.ResolvedAgent
+	for _, item := range agents {
+		if item.Goal == "" {
+			if item.Schedule != "" {
+				return SnapshotView{}, fmt.Errorf("agent %q has no goal in portfolio mode", item.Name)
+			}
+			continue
+		}
+		resolved, err := portfolio.Resolve(item, goals, &policy)
+		if err != nil {
+			return SnapshotView{}, fmt.Errorf("resolve %s: %w", item.FilePath, err)
+		}
+		resolvedByName[item.Name] = resolved
+		if item.Schedule != "" {
+			scheduled = append(scheduled, resolved)
+		}
+	}
+	state, err := portfolio.BuildSnapshot(now, policy, goals, scheduled, runs)
+	if err != nil {
+		return SnapshotView{}, err
+	}
+	decisions := portfolio.Decide(state)
+	return buildPortfolioView(now, policy, goals, agents, runs, state, resolvedByName, decisions), nil
+}
+
+func buildPortfolioView(now time.Time, policy portfolio.Policy, goals map[string]*portfolio.Goal, agents []*agent.Agent, runs []store.Run, state portfolio.Snapshot, resolvedByName map[string]*portfolio.ResolvedAgent, decisions []portfolio.Decision) SnapshotView {
+	budget := policy.DailyBudget
+	remaining := policy.DailyBudget - state.GlobalSpent
+	maxPending := policy.MaxPending
+	maxUnrated := policy.MaxUnrated
+	view := SnapshotView{
+		GeneratedAt: now,
+		Mode:        "portfolio",
+		Summary: Summary{
+			DailyBudgetUSD: &budget,
+			SpentUSD:       state.GlobalSpent,
+			RemainingUSD:   &remaining,
+			Pending:        state.Pending,
+			MaxPending:     &maxPending,
+			Unrated:        state.Unrated,
+			MaxUnrated:     &maxUnrated,
+		},
+		Goals:      make([]GoalView, 0, len(goals)),
+		Agents:     make([]AgentView, 0, len(agents)),
+		RecentRuns: recentRunViews(runs),
+	}
+
+	totalCost := make(map[string]float64)
+	useful := make(map[string]int)
+	for _, run := range runs {
+		totalCost[run.Goal] += run.CostUSD
+		if run.Status != "satisfied" && run.LatestOutcome() != nil && run.LatestOutcome().Value == "useful" {
+			useful[run.Goal]++
+		}
+	}
+	for _, name := range portfolio.SortedGoalNames(goals) {
+		goal := goals[name]
+		goalView := GoalView{Name: goal.Name, Description: goal.Body, Weight: goal.Weight, Authority: goal.Authority, SpentUSD: state.GoalSpent[name], UsefulOutcomes: useful[name]}
+		if goal.DailyBudget > 0 {
+			cap := goal.DailyBudget
+			goalView.DailyBudgetUSD = &cap
+		}
+		if useful[name] > 0 {
+			costPerUseful := totalCost[name] / float64(useful[name])
+			goalView.CostPerUsefulUSD = &costPerUseful
+		}
+		view.Goals = append(view.Goals, goalView)
+	}
+
+	latest := latestRuns(runs)
+	decisionByName := make(map[string]portfolio.Decision, len(decisions))
+	for _, decision := range decisions {
+		decisionByName[decision.Agent.Agent.Name] = decision
+	}
+	for _, item := range agents {
+		resolved := resolvedByName[item.Name]
+		agentView := AgentView{Name: item.Name, Goal: item.Goal, Schedule: item.Schedule, Model: item.Model, Mode: item.Mode, Authority: legacyAuthority(item), BudgetUSD: item.Budget, ManualOnly: item.Schedule == ""}
+		if resolved != nil {
+			agentView.Authority = resolved.Authority
+			agentView.RatedSamples = portfolio.StatsFor(state, resolved).Rated
+		}
+		if run, ok := latest[item.Name]; ok {
+			value := runView(run)
+			agentView.LatestRun = &value
+		}
+		if item.Schedule == "" {
+			agentView.Decision = "manual only"
+		} else if decision, ok := decisionByName[item.Name]; ok {
+			score := decision.Score
+			estimatedCost := decision.EstimatedCostUSD
+			agentView.Score = &score
+			agentView.EstimatedCostUSD = &estimatedCost
+			agentView.Decision = decision.Reason
+		}
+		view.Agents = append(view.Agents, agentView)
+	}
+	sort.Slice(view.Agents, func(i, j int) bool { return view.Agents[i].Name < view.Agents[j].Name })
+	return view
 }
 
 func legacySnapshot(now time.Time, agents []*agent.Agent, runs []store.Run) SnapshotView {
@@ -52,6 +160,7 @@ func legacySnapshot(now time.Time, agents []*agent.Agent, runs []store.Run) Snap
 			Name:       item.Name,
 			Schedule:   item.Schedule,
 			Model:      item.Model,
+			Mode:       item.Mode,
 			Authority:  legacyAuthority(item),
 			BudgetUSD:  item.Budget,
 			ManualOnly: item.Schedule == "",

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/level09/watchd/internal/portfolio"
+	"github.com/level09/watchd/internal/app"
 	"github.com/level09/watchd/internal/store"
 )
 
@@ -105,20 +105,15 @@ func TestPortfolioSmoke(t *testing.T) {
 			t.Fatalf("portfolio output missing %q: %s", want, output)
 		}
 	}
-	policy, goals, resolved, runs, err := loadPortfolio()
+	view, err := app.Snapshot(".", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := portfolio.BuildSnapshot(time.Now(), *policy, goals, scheduledAgents(resolved), runs)
-	if err != nil {
-		t.Fatal(err)
+	byName := make(map[string]app.AgentView, len(view.Agents))
+	for _, item := range view.Agents {
+		byName[item.Name] = item
 	}
-	decisions := portfolio.Decide(snapshot)
-	byName := make(map[string]portfolio.Decision, len(decisions))
-	for _, decision := range decisions {
-		byName[decision.Agent.Agent.Name] = decision
-	}
-	if !byName["explorer"].Admit || byName["expensive"].Admit {
+	if byName["explorer"].Decision != "highest verified return" || byName["expensive"].Decision == "highest verified return" {
 		t.Fatalf("allocation did not preserve exploration over expensive neutral strategy: %+v", byName)
 	}
 }
