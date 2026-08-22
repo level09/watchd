@@ -1,13 +1,13 @@
 # Watchd Local Control Plane: First Vertical Slice
 
 Date: 2026-08-22
-Status: proposed
+Status: approved
 
 ## Decision
 
-Add a public, read-only Go application API and a `watchd serve` command that
-starts an embedded local dashboard. The CLI and HTTP server will derive state
-from the same application API. Existing Markdown, YAML, and JSON files remain
+Add an internal, read-only snapshot builder and a `watchd serve` command that
+starts an embedded local dashboard. The CLI and HTTP server derive state from
+the same snapshot builder. Existing Markdown, YAML, and JSON files remain
 authoritative.
 
 This slice proves the single-binary product shape without adding mutations,
@@ -18,12 +18,13 @@ SQLite, MCP, authentication, a file watcher, or a general editor.
 From a watchd directory, the user runs:
 
 ```text
-watchd serve
+watchd serve [--addr 127.0.0.1:7337]
 ```
 
-Watchd binds to `127.0.0.1:7337`, prints the dashboard URL, and serves until it
-receives an interrupt or termination signal. It does not open a browser or bind
-to a non-loopback interface.
+Watchd binds to the address (default `127.0.0.1:7337`), prints the dashboard
+URL, and serves until it receives an interrupt or termination signal. It does
+not open a browser. A non-loopback address is rejected with an error; remote
+access is a separate design.
 
 The dashboard shows:
 
@@ -43,7 +44,7 @@ interface in this slice.
 ```text
 agents/*.md     goals/*.md     watchd.yaml     runs/*.json
       \             |              |               /
-                    watchd.App
+                   internal/app
                          |
               immutable Snapshot view
                     /           \
@@ -52,9 +53,11 @@ agents/*.md     goals/*.md     watchd.yaml     runs/*.json
                            embedded dashboard
 ```
 
-`watchd.App` is the only new domain boundary. It loads the current filesystem
-state, applies the existing portfolio rules, and returns an immutable snapshot.
-It does not cache state and does not own a background process.
+`internal/app` is the only new domain boundary. It loads the current
+filesystem state, applies the existing portfolio rules, and returns an
+immutable snapshot. It does not cache state and does not own a background
+process. It absorbs the loading logic that `loadPortfolio` and `eligibility`
+in `internal/cli` perform today, so there is one loader, not two.
 
 The HTTP server is an adapter. It must not parse agent files, calculate
 eligibility, inspect the run ledger, or duplicate portfolio rules.
@@ -62,31 +65,25 @@ eligibility, inspect the run ledger, or duplicate portfolio rules.
 The browser is a projection. It must not read local files directly or infer
 domain state from presentation strings.
 
-## Public Go API
+## Snapshot API
 
-The module root gains package `watchd` with this initial shape:
+Package `internal/app` exposes one function:
 
 ```go
-type Config struct {
-    Root string
-    Now  func() time.Time
-}
-
-type App struct { /* private fields */ }
-
-func New(config Config) (*App, error)
-func (app *App) Snapshot(ctx context.Context) (Snapshot, error)
+func Snapshot(root string, now time.Time) (SnapshotView, error)
 ```
 
-`Root` is required and is resolved to an absolute path during construction.
-`Now` defaults to `time.Now` and exists so portfolio day boundaries and tests
-are deterministic.
+`root` is the watchd directory. `now` is passed explicitly so portfolio day
+boundaries and tests are deterministic; callers pass `time.Now()`.
 
-The public snapshot contains presentation-neutral values:
+The package stays internal. It is not a public Go API and makes no
+compatibility promise beyond the JSON shape served at `/api/v1/snapshot`. It
+becomes public only when a second consumer outside this module exists.
+
+The snapshot contains presentation-neutral values:
 
 ```go
-type Snapshot struct {
-    Schema      int
+type SnapshotView struct {
     GeneratedAt time.Time
     Mode        string
     Summary     Summary
@@ -96,7 +93,11 @@ type Snapshot struct {
 }
 ```
 
-`Schema` is `1` for this contract. `Mode` is `legacy` or `portfolio`.
+The view type is `SnapshotView` because Go does not permit a package-level type
+and function to share the same name.
+
+`Mode` is `legacy` or `portfolio`. The `/api/v1` path prefix is the contract
+version; there is no separate schema field.
 
 `Summary` contains the configured daily budget, current spend, remaining
 budget, pending count and cap, and unrated count and cap. Budget and cap fields
@@ -118,10 +119,8 @@ labels, or terminal icons. Optional numbers and nested values use pointers so
 JSON distinguishes an absent value from zero. Collections use deterministic
 ordering. JSON field names form the first HTTP read contract.
 
-This package may use the current `internal/agent`, `internal/portfolio`, and
-`internal/store` packages. Those packages do not become public in this slice.
-The application API is deliberately narrow so their implementations can still
-change.
+This package uses the current `internal/agent`, `internal/portfolio`, and
+`internal/store` packages and adds no rules of its own.
 
 ## Snapshot semantics
 
@@ -137,9 +136,15 @@ The application follows these rules:
    portfolio snapshot, and call the existing deterministic allocator.
 4. In legacy mode, load agents and runs without requiring goals or per-run
    budgets.
-5. Return errors for invalid authored state. Do not omit invalid records or
-   return a partial successful snapshot.
+5. Return errors for invalid authored state, naming the offending file. Do
+   not omit invalid records or return a partial successful snapshot.
 6. Limit recent runs to the latest 50 entries in the application layer.
+
+Every refresh re-reads every file under `runs/`.
+
+```text
+ponytail: full rescan per snapshot; switch to mtime filtering when runs/ passes a few thousand files
+```
 
 No new scoring, eligibility, or outcome rules are introduced.
 
@@ -166,9 +171,8 @@ with this shape when the application cannot build a snapshot:
 The server sets a read timeout, write timeout, idle timeout, and maximum header
 size. It performs graceful shutdown when the command context is canceled.
 
-The first slice has no CORS headers. Loopback binding is the security boundary.
-Supporting remote access requires a separate design with authentication and
-transport security.
+The first slice has no CORS headers and no authentication. Loopback binding is
+the security boundary, which is why `serve` refuses non-loopback addresses.
 
 ## Dashboard
 
@@ -195,9 +199,9 @@ charts, animation, themes, and editing controls are outside this slice.
 
 Add `serve` to command dispatch and help output.
 
-The existing status and portfolio commands consume `watchd.App`. Formatting
-remains inside `internal/cli`. Other commands continue to use their current
-paths.
+The existing status and portfolio commands consume `internal/app` and drop
+their private loaders. Formatting remains inside `internal/cli`. Other
+commands continue to use their current paths.
 
 This is a targeted convergence, not a rewrite of `internal/cli/cli.go`.
 
@@ -206,6 +210,7 @@ This is a targeted convergence, not a rewrite of `internal/cli/cli.go`.
 - Invalid configuration stops snapshot generation and is visible in the API
   and dashboard.
 - A port conflict fails `watchd serve` immediately with the bind error.
+- A non-loopback `--addr` fails before binding.
 - Missing `agents/` follows the existing discovery error behavior.
 - Corrupt run JSON fails snapshot generation and names the affected file.
 - Browser refresh failures do not clear the last valid view.
@@ -222,9 +227,9 @@ There are no silent fallbacks from portfolio mode to legacy mode.
 - Build a deterministic portfolio snapshot and preserve existing admission
   scores and reasons.
 - Sort goals, agents, and runs deterministically.
-- Reject invalid policy, goal, agent, and run files.
+- Reject invalid policy, goal, agent, and run files and name the file.
 - Apply the 50-run limit after ordering.
-- Use the injected clock for daily spend and generated time.
+- Use the passed time for daily spend and generated time.
 
 ### Server tests
 
@@ -238,8 +243,9 @@ There are no silent fallbacks from portfolio mode to legacy mode.
 ### CLI tests
 
 - Document `serve` in help.
-- Reject extra positional arguments.
-- Surface bind and application construction errors.
+- Reject extra positional arguments and non-loopback addresses.
+- Surface bind errors. Snapshot errors remain visible through the API and
+  dashboard after the server starts.
 
 ### Release verification
 
@@ -258,7 +264,8 @@ test does not open a browser or start a persistent process.
 - One compiled binary contains the daemon, CLI, HTTP server, and dashboard
   assets.
 - `watchd serve` exposes the current directory through a local read-only UI.
-- The HTTP response and relevant CLI views come from the same application API.
+- The HTTP response and the status and portfolio commands come from the same
+  snapshot builder, and `internal/cli` no longer has its own loader.
 - Portfolio decisions match the existing allocator for identical state and
   time.
 - No browser code reads or writes the filesystem.
@@ -278,6 +285,6 @@ test does not open a browser or start a persistent process.
 - automatic browser launch;
 - a general Markdown or block editor.
 
-The next slice should add one mutation path through `watchd.App`, starting with
-approve, reject, and rate. It requires a separate reviewed design because it
-changes authority and concurrency behavior.
+The next slice should add one mutation path through `internal/app`, starting
+with approve, reject, and rate. It requires a separate reviewed design because
+it changes authority and concurrency behavior.
