@@ -51,6 +51,29 @@ func TestSnapshotNamesInvalidAgentFile(t *testing.T) {
 	}
 }
 
+func TestSnapshotNamesInvalidPolicyFile(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "watchd.yaml", "daily_budget: 0\n")
+
+	_, err := Snapshot(root, time.Now())
+	path := filepath.Join(root, "watchd.yaml")
+	if err == nil || !strings.Contains(err.Error(), path) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestSnapshotNamesInvalidGoalFile(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "watchd.yaml", "daily_budget: 1\n")
+	writeFixture(t, root, "goals/broken.md", "---\nweight: 0\n---\nInvalid goal.")
+
+	_, err := Snapshot(root, time.Now())
+	path := filepath.Join(root, "goals", "broken.md")
+	if err == nil || !strings.Contains(err.Error(), path) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestSnapshotNamesScheduledAgentWithoutGoalFile(t *testing.T) {
 	root := t.TempDir()
 	writeFixture(t, root, "watchd.yaml", "daily_budget: 1\n")
@@ -102,6 +125,33 @@ func TestSnapshotPortfolioPreservesAllocation(t *testing.T) {
 	}
 	if got.Agents[1].Name != "manual" || got.Agents[1].Decision != "manual only" {
 		t.Fatalf("manual = %+v", got.Agents[1])
+	}
+}
+
+func TestSnapshotAppliesSpendToNowLocalDay(t *testing.T) {
+	root := t.TempDir()
+	location := time.FixedZone("UTC+03", 3*60*60)
+	now := time.Date(2026, 8, 22, 0, 30, 0, 0, location)
+	writeFixture(t, root, "watchd.yaml", "daily_budget: 1\n")
+	writeFixture(t, root, "goals/product.md", "---\nname: product\n---\nShip.")
+	saveFixtureRun(t, root, store.Run{
+		Agent: "same-local-day", Goal: "product", Status: "success", CostUSD: 0.25,
+		StartedAt: time.Date(2026, 8, 21, 22, 0, 0, 0, time.UTC),
+	})
+	saveFixtureRun(t, root, store.Run{
+		Agent: "previous-local-day", Goal: "product", Status: "success", CostUSD: 0.50,
+		StartedAt: time.Date(2026, 8, 21, 20, 0, 0, 0, time.UTC),
+	})
+
+	got, err := Snapshot(root, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Summary.SpentUSD != 0.25 || got.Summary.RemainingUSD == nil || *got.Summary.RemainingUSD != 0.75 {
+		t.Fatalf("summary = %+v", got.Summary)
+	}
+	if len(got.Goals) != 1 || got.Goals[0].SpentUSD != 0.25 {
+		t.Fatalf("goals = %+v", got.Goals)
 	}
 }
 

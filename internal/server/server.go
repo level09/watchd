@@ -102,7 +102,7 @@ func newHandler(root string, now func() time.Time) http.Handler {
 	mux.HandleFunc("GET /api/v1/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		snapshot, err := app.Snapshot(root, now())
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "snapshot_invalid", "snapshot is invalid")
+			writeError(w, http.StatusInternalServerError, "snapshot_invalid", err.Error())
 			return
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
