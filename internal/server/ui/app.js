@@ -3,6 +3,7 @@ const elements = Object.fromEntries(
   ['mode', 'error', 'freshness', 'summary', 'goals', 'agents', 'activity']
     .map((id) => [id, document.getElementById(id)]),
 );
+let lastSuccessfulRefresh = 'No successful refresh yet';
 
 function money(value) {
   return value == null ? '-' : `$${Number(value).toFixed(4)}`;
@@ -149,12 +150,13 @@ function renderSnapshot(snapshot) {
   renderAgents(snapshot.agents);
   renderActivity(snapshot.recent_runs);
   elements.error.textContent = '';
-  elements.freshness.textContent = `Updated ${new Date(snapshot.generated_at).toLocaleTimeString()}`;
+  lastSuccessfulRefresh = `Updated ${new Date(snapshot.generated_at).toLocaleTimeString()}`;
+  elements.freshness.textContent = lastSuccessfulRefresh;
 }
 
 function showError(message) {
   elements.error.textContent = message;
-  elements.freshness.textContent = 'Showing last successful refresh';
+  elements.freshness.textContent = `${lastSuccessfulRefresh} (stale)`;
 }
 
 async function refresh() {
