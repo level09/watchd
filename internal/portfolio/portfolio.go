@@ -136,8 +136,8 @@ func DiscoverGoals(dir string) (map[string]*Goal, error) {
 			errs = append(errs, err)
 			continue
 		}
-		if _, exists := goals[goal.Name]; exists {
-			errs = append(errs, fmt.Errorf("duplicate goal %q", goal.Name))
+		if previous, exists := goals[goal.Name]; exists {
+			errs = append(errs, fmt.Errorf("duplicate goal %q in %s and %s", goal.Name, previous.FilePath, path))
 			continue
 		}
 		goals[goal.Name] = goal
