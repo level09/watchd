@@ -22,8 +22,8 @@ func TestHandlerServesDashboardRoutes(t *testing.T) {
 		contentType string
 		body        string
 	}{
-		{path: "/", contentType: "text/html", body: "Loading watchd..."},
-		{path: "/app.js", contentType: "text/javascript", body: "watchd"},
+		{path: "/", contentType: "text/html", body: "Portfolio summary"},
+		{path: "/app.js", contentType: "text/javascript", body: "refreshInterval"},
 		{path: "/style.css", contentType: "text/css", body: "sans-serif"},
 		{path: "/api/v1/snapshot", contentType: "application/json", body: `"mode":"legacy"`},
 		{path: "/healthz", contentType: "text/plain", body: "ok"},
@@ -42,6 +42,28 @@ func TestHandlerServesDashboardRoutes(t *testing.T) {
 				t.Fatalf("body=%s", response.Body.String())
 			}
 		})
+	}
+}
+
+func TestDashboardContainsRequiredProjectionHooks(t *testing.T) {
+	page, err := uiFiles.ReadFile("ui/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"summary", "goals", "agents", "activity", "freshness", "error"} {
+		if !strings.Contains(string(page), `id="`+id+`"`) {
+			t.Fatalf("dashboard missing %q", id)
+		}
+	}
+
+	script, err := uiFiles.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, hook := range []string{"/api/v1/snapshot", "5000", "renderSnapshot", "showError"} {
+		if !strings.Contains(string(script), hook) {
+			t.Fatalf("dashboard script missing %q", hook)
+		}
 	}
 }
 
@@ -93,6 +115,16 @@ func TestNewRejectsNonLoopbackAddresses(t *testing.T) {
 	}
 }
 
+func TestValidateLoopbackAcceptsLoopbackAddresses(t *testing.T) {
+	for _, addr := range []string{"127.0.0.1:7337", "127.0.0.2:7337", "localhost:7337", "[::1]:7337"} {
+		t.Run(addr, func(t *testing.T) {
+			if err := validateLoopback(addr); err != nil {
+				t.Fatalf("validateLoopback(%q) = %v", addr, err)
+			}
+		})
+	}
+}
+
 func TestServeStopsOnContextCancellation(t *testing.T) {
 	server, err := New(t.TempDir(), "127.0.0.1:0", time.Now)
 	if err != nil {
@@ -102,8 +134,13 @@ func TestServeStopsOnContextCancellation(t *testing.T) {
 	result := make(chan error, 1)
 	go func() { result <- server.Serve(ctx) }()
 	cancel()
-	if err := <-result; err != nil {
-		t.Fatal(err)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not stop after cancellation")
 	}
 }
 
