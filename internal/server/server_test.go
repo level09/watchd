@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -107,9 +108,19 @@ func TestHandlerReportsInvalidSnapshotWithoutFailingHealth(t *testing.T) {
 
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/snapshot", nil))
-	if response.Code != http.StatusInternalServerError ||
-		!strings.Contains(response.Body.String(), `"code":"snapshot_invalid"`) {
+	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body errorEnvelope
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error.Code != "snapshot_invalid" {
+		t.Fatalf("error code = %q", body.Error.Code)
+	}
+	path := filepath.Join(root, "agents", "broken.md")
+	if !strings.Contains(body.Error.Message, path) {
+		t.Fatalf("error message %q does not name %q", body.Error.Message, path)
 	}
 
 	response = httptest.NewRecorder()
