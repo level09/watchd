@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/level09/watchd/internal/agent"
+	"github.com/level09/watchd/internal/portfolio"
 	"github.com/level09/watchd/internal/store"
 )
 
@@ -49,13 +51,44 @@ func TestSnapshotNamesInvalidAgentFile(t *testing.T) {
 	}
 }
 
-func TestSnapshotRejectsPortfolioUntilPortfolioConversionExists(t *testing.T) {
+func TestSnapshotPortfolioPreservesAllocation(t *testing.T) {
 	root := t.TempDir()
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	writeFixture(t, root, "watchd.yaml", "daily_budget: 1\n")
+	writeFixture(t, root, "goals/product.md", "---\nname: product\nweight: 2\nauthority: observe\n---\nShip useful software.")
+	writeFixture(t, root, "agents/alpha.md", "---\nname: alpha\ngoal: product\nschedule: 1h\nbudget: 0.10\n---\nFind release blockers.")
+	writeFixture(t, root, "agents/manual.md", "---\nname: manual\ngoal: product\nbudget: 0.10\n---\nInspect on request.")
 
-	_, err := Snapshot(root, time.Now())
-	if err == nil || !strings.Contains(err.Error(), "portfolio snapshots are not available") {
-		t.Fatalf("error = %v", err)
+	agents, err := agent.DiscoverStrict(filepath.Join(root, "agents"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	goals, err := portfolio.DiscoverGoals(filepath.Join(root, "goals"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	alpha := agent.FindByName(agents, "alpha")
+	saveFixtureRun(t, root, store.Run{
+		Agent: "alpha", Goal: "product", AgentHash: alpha.Hash, GoalHash: goals["product"].Hash,
+		Status: "success", CostUSD: 0.05, StartedAt: now,
+		OutcomeRatings: []store.OutcomeRating{{Value: "useful", Source: "human", RatedAt: now}},
+	})
+
+	got, err := Snapshot(root, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Mode != "portfolio" || *got.Summary.RemainingUSD != 0.95 {
+		t.Fatalf("summary = %+v", got.Summary)
+	}
+	if len(got.Goals) != 1 || got.Goals[0].UsefulOutcomes != 1 || *got.Goals[0].CostPerUsefulUSD != 0.05 {
+		t.Fatalf("goals = %+v", got.Goals)
+	}
+	if got.Agents[0].Name != "alpha" || got.Agents[0].Decision != "highest verified return" || got.Agents[0].RatedSamples != 1 {
+		t.Fatalf("alpha = %+v", got.Agents[0])
+	}
+	if got.Agents[1].Name != "manual" || got.Agents[1].Decision != "manual only" {
+		t.Fatalf("manual = %+v", got.Agents[1])
 	}
 }
 

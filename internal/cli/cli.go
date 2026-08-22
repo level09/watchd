@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 	"github.com/level09/watchd/internal/agent"
+	"github.com/level09/watchd/internal/app"
 	"github.com/level09/watchd/internal/daemon"
 	"github.com/level09/watchd/internal/portfolio"
 	"github.com/level09/watchd/internal/runner"
@@ -153,21 +154,17 @@ func cmdRun(name string) error {
 	return nil
 }
 func cmdList() error {
-	agents, err := agent.Discover(agentsDir)
+	view, err := app.Snapshot(".", time.Now())
 	if err != nil {
 		return err
 	}
-	reasons, err := eligibility()
-	if err != nil {
-		return err
-	}
-	if len(agents) == 0 {
+	if len(view.Agents) == 0 {
 		fmt.Println("no agents found. run: watchd init")
 		return nil
 	}
 	fmt.Printf("%-20s %-16s %-12s %-10s %-10s %s\n", "AGENT", "GOAL", "SCHEDULE", "MODEL", "MODE", "ELIGIBILITY")
-	for _, a := range agents {
-		fmt.Printf("%-20s %-16s %-12s %-10s %-10s %s\n", a.Name, orDash(a.Goal), orDash(a.Schedule), a.Model, a.Mode, orDash(reasons[a.Name]))
+	for _, item := range view.Agents {
+		fmt.Printf("%-20s %-16s %-12s %-10s %-10s %s\n", item.Name, orDash(item.Goal), orDash(item.Schedule), item.Model, item.Mode, orDash(item.Decision))
 	}
 	return nil
 }
@@ -258,86 +255,45 @@ func cmdCheck(name string) error {
 	return nil
 }
 func cmdPortfolio() error {
-	policy, goals, resolved, runs, err := loadPortfolio()
+	view, err := app.Snapshot(".", time.Now())
 	if err != nil {
 		return err
 	}
-	scheduled := scheduledAgents(resolved)
-	snapshot, err := portfolio.BuildSnapshot(time.Now(), *policy, goals, scheduled, runs)
-	if err != nil {
-		return err
+	if view.Mode != "portfolio" {
+		return fmt.Errorf("watchd.yaml not found")
 	}
-	remaining := policy.DailyBudget - snapshot.GlobalSpent
 	fmt.Printf("portfolio  spent $%.4f  remaining $%.4f  pending %d/%d  unrated %d/%d\n",
-		snapshot.GlobalSpent, remaining, snapshot.Pending, policy.MaxPending, snapshot.Unrated, policy.MaxUnrated)
-	useful, totalCost := map[string]int{}, map[string]float64{}
-	for i := range runs {
-		totalCost[runs[i].Goal] += runs[i].CostUSD
-		if runs[i].Status != "satisfied" && runs[i].LatestOutcome() != nil && runs[i].LatestOutcome().Value == "useful" {
-			useful[runs[i].Goal]++
-		}
-	}
+		view.Summary.SpentUSD, *view.Summary.RemainingUSD, view.Summary.Pending, *view.Summary.MaxPending, view.Summary.Unrated, *view.Summary.MaxUnrated)
 	fmt.Printf("%-16s %8s %10s %10s %10s %s\n", "GOAL", "WEIGHT", "SPENT", "CAP", "OUTCOMES", "EFFICIENCY")
-	for _, name := range portfolio.SortedGoalNames(goals) {
+	for _, goal := range view.Goals {
 		efficiency := "-"
 		cap := "-"
-		if useful[name] > 0 {
-			efficiency = fmt.Sprintf("$%.4f/useful", totalCost[name]/float64(useful[name]))
+		if goal.CostPerUsefulUSD != nil {
+			efficiency = fmt.Sprintf("$%.4f/useful", *goal.CostPerUsefulUSD)
 		}
-		if goals[name].DailyBudget > 0 {
-			cap = fmt.Sprintf("$%.4f", goals[name].DailyBudget)
+		if goal.DailyBudgetUSD != nil {
+			cap = fmt.Sprintf("$%.4f", *goal.DailyBudgetUSD)
 		}
-		fmt.Printf("%-16s %8.2f $%9.4f %10s %8d useful %s\n", name, goals[name].Weight, snapshot.GoalSpent[name], cap, useful[name], efficiency)
+		fmt.Printf("%-16s %8.2f $%9.4f %10s %8d useful %s\n", goal.Name, goal.Weight, goal.SpentUSD, cap, goal.UsefulOutcomes, efficiency)
 	}
 	fmt.Printf("\n%-20s %-16s %10s %10s %10s %s\n", "AGENT", "GOAL", "SCORE", "RATED", "AVG COST", "DECISION")
-	for _, decision := range portfolio.Decide(snapshot) {
-		stats := portfolio.StatsFor(snapshot, decision.Agent)
-		fmt.Printf("%-20s %-16s %10.3f %8d rated $%9.4f %s\n", decision.Agent.Agent.Name,
-			decision.Agent.Goal.Name, decision.Score, stats.Rated, decision.EstimatedCostUSD, decision.Reason)
+	for _, item := range view.Agents {
+		if item.ManualOnly || item.Score == nil || item.EstimatedCostUSD == nil {
+			continue
+		}
+		fmt.Printf("%-20s %-16s %10.3f %8d rated $%9.4f %s\n", item.Name,
+			item.Goal, *item.Score, item.RatedSamples, *item.EstimatedCostUSD, item.Decision)
 	}
 	var manual []string
-	for _, a := range resolved {
-		if a.Agent.Schedule == "" {
-			manual = append(manual, a.Agent.Name)
+	for _, item := range view.Agents {
+		if item.ManualOnly && item.Goal != "" {
+			manual = append(manual, item.Name)
 		}
 	}
 	if len(manual) > 0 {
 		fmt.Printf("\nmanual portfolio agents: %s\n", strings.Join(manual, ", "))
 	}
 	return nil
-}
-func loadPortfolio() (*portfolio.Policy, map[string]*portfolio.Goal, []*portfolio.ResolvedAgent, []store.Run, error) {
-	policy, err := portfolio.LoadPolicy("watchd.yaml")
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	if policy == nil {
-		return nil, nil, nil, nil, fmt.Errorf("watchd.yaml not found")
-	}
-	goals, err := portfolio.DiscoverGoals("goals")
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	agents, err := agent.DiscoverStrict(agentsDir)
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
-	resolved := make([]*portfolio.ResolvedAgent, 0, len(agents))
-	for _, a := range agents {
-		if a.Goal == "" {
-			if a.Schedule != "" {
-				return nil, nil, nil, nil, fmt.Errorf("agent %q has no goal in portfolio mode", a.Name)
-			}
-			continue
-		}
-		r, err := portfolio.Resolve(a, goals, policy)
-		if err != nil {
-			return nil, nil, nil, nil, err
-		}
-		resolved = append(resolved, r)
-	}
-	runs, err := store.New(".").GetRuns("", 0)
-	return policy, goals, resolved, runs, err
 }
 func loadAgent(name string) (*agent.Agent, error) {
 	agents, err := agent.Discover(agentsDir)
@@ -349,34 +305,6 @@ func loadAgent(name string) (*agent.Agent, error) {
 		return nil, fmt.Errorf("agent %q not found in %s/", name, agentsDir)
 	}
 	return a, nil
-}
-func eligibility() (map[string]string, error) {
-	policy, err := portfolio.LoadPolicy("watchd.yaml")
-	if err != nil || policy == nil {
-		return nil, err
-	}
-	policy, goals, agents, runs, err := loadPortfolio()
-	if err != nil {
-		return nil, err
-	}
-	snapshot, err := portfolio.BuildSnapshot(time.Now(), *policy, goals, scheduledAgents(agents), runs)
-	if err != nil {
-		return nil, err
-	}
-	reasons := make(map[string]string, len(agents))
-	allAgents, err := agent.DiscoverStrict(agentsDir)
-	if err != nil {
-		return nil, err
-	}
-	for _, a := range allAgents {
-		if a.Schedule == "" {
-			reasons[a.Name] = "manual only"
-		}
-	}
-	for _, decision := range portfolio.Decide(snapshot) {
-		reasons[decision.Agent.Agent.Name] = decision.Reason
-	}
-	return reasons, nil
 }
 func cmdLogs(name string) error {
 	s := store.New(".")
@@ -560,15 +488,6 @@ func validatePendingStrategy(pending *store.Run, a *agent.Agent) error {
 	}
 	return nil
 }
-func scheduledAgents(agents []*portfolio.ResolvedAgent) []*portfolio.ResolvedAgent {
-	result := make([]*portfolio.ResolvedAgent, 0, len(agents))
-	for _, a := range agents {
-		if a.Agent.Schedule != "" {
-			result = append(result, a)
-		}
-	}
-	return result
-}
 func cmdReject(id string) error {
 	s := store.New(".")
 	run, err := s.GetRun(id)
@@ -651,6 +570,7 @@ func admitAgent(a *agent.Agent, approval bool) (*portfolio.ResolvedAgent, *store
 	}
 	return resolved, allocation, nil
 }
+
 const pidFile = ".watchd.pid"
 
 func cmdUp() error {
@@ -705,37 +625,27 @@ func cmdEdit(name string) error {
 	return cmd.Run()
 }
 func cmdStatus() error {
-	agents, err := agent.Discover(agentsDir)
+	view, err := app.Snapshot(".", time.Now())
 	if err != nil {
 		return err
 	}
-	if len(agents) == 0 {
+	if len(view.Agents) == 0 {
 		printHelp()
 		return nil
 	}
-	reasons, err := eligibility()
-	if err != nil {
-		return err
-	}
-	s := store.New(".")
 	fmt.Printf("%-20s %-16s %-12s %-8s %-12s %-12s %s\n", "AGENT", "GOAL", "SCHEDULE", "STATUS", "COST", "LAST RUN", "ELIGIBILITY")
-	for _, a := range agents {
-		runs, err := s.GetRuns(a.Name, 1)
-		if err != nil {
-			return err
-		}
+	for _, item := range view.Agents {
 		status := "-"
 		cost := "-"
 		lastRun := "never"
-		if len(runs) > 0 {
-			r := runs[0]
-			status = r.Status
-			if r.CostUSD > 0 {
-				cost = fmt.Sprintf("$%.4f", r.CostUSD)
+		if item.LatestRun != nil {
+			status = item.LatestRun.Status
+			if item.LatestRun.CostUSD > 0 {
+				cost = fmt.Sprintf("$%.4f", item.LatestRun.CostUSD)
 			}
-			lastRun = relativeTime(r.StartedAt)
+			lastRun = relativeTime(item.LatestRun.StartedAt)
 		}
-		fmt.Printf("%-20s %-16s %-12s %-8s %-12s %-12s %s\n", a.Name, orDash(a.Goal), orDash(a.Schedule), status, cost, lastRun, orDash(reasons[a.Name]))
+		fmt.Printf("%-20s %-16s %-12s %-8s %-12s %-12s %s\n", item.Name, orDash(item.Goal), orDash(item.Schedule), status, cost, lastRun, orDash(item.Decision))
 	}
 	return nil
 }

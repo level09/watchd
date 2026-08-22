@@ -37,6 +37,7 @@ type AgentView struct {
 	Goal             string   `json:"goal,omitempty"`
 	Schedule         string   `json:"schedule,omitempty"`
 	Model            string   `json:"model"`
+	Mode             string   `json:"mode"`
 	Authority        string   `json:"authority"`
 	BudgetUSD        float64  `json:"budget_usd"`
 	ManualOnly       bool     `json:"manual_only"`
