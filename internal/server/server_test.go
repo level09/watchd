@@ -67,6 +67,22 @@ func TestDashboardContainsRequiredProjectionHooks(t *testing.T) {
 	}
 }
 
+func TestDashboardKeepsLastSuccessfulFreshness(t *testing.T) {
+	script, err := uiFiles.ReadFile("ui/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, hook := range []string{
+		"let lastSuccessfulRefresh =",
+		"lastSuccessfulRefresh = `Updated ${new Date(snapshot.generated_at).toLocaleTimeString()}`",
+		"elements.freshness.textContent = `${lastSuccessfulRefresh} (stale)`",
+	} {
+		if !strings.Contains(string(script), hook) {
+			t.Fatalf("dashboard freshness handling missing %q", hook)
+		}
+	}
+}
+
 func TestHandlerRejectsInvalidRequests(t *testing.T) {
 	root := t.TempDir()
 	handler := newHandler(root, time.Now)
