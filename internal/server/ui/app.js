@@ -1,9 +1,14 @@
 const refreshInterval = 5000;
 const elements = Object.fromEntries(
-  ['mode', 'error', 'freshness', 'summary', 'goals', 'agents', 'activity']
+  [
+    'mode', 'error', 'freshness', 'summary', 'goals', 'agents', 'activity',
+    'agent-dialog', 'agent-form', 'agent-goal', 'agent-form-error', 'agent-preview',
+    'agent-preview-path', 'agent-preview-content', 'agent-preview-error', 'create-agent',
+  ]
     .map((id) => [id, document.getElementById(id)]),
 );
 let lastSuccessfulRefresh = 'No successful refresh yet';
+let approvedDraft = null;
 
 function money(value) {
   return value == null ? '-' : `$${Number(value).toFixed(4)}`;
@@ -149,10 +154,82 @@ function renderSnapshot(snapshot) {
   renderGoals(snapshot.goals);
   renderAgents(snapshot.agents);
   renderActivity(snapshot.recent_runs);
+  const selectedGoal = elements['agent-goal'].value;
+  elements['agent-goal'].replaceChildren(
+    new Option('No goal', ''),
+    ...snapshot.goals.map((goal) => new Option(goal.name, goal.name)),
+  );
+  elements['agent-goal'].value = selectedGoal;
   elements.error.textContent = '';
   lastSuccessfulRefresh = `Updated ${new Date(snapshot.generated_at).toLocaleTimeString()}`;
   elements.freshness.textContent = lastSuccessfulRefresh;
 }
+
+async function postJSON(path, value) {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(value),
+  });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error?.message || `HTTP ${response.status}`);
+  return body;
+}
+
+function closeAgentDialog() {
+  elements['agent-dialog'].close();
+  elements['agent-form'].reset();
+  elements['agent-form'].hidden = false;
+  elements['agent-preview'].hidden = true;
+  elements['agent-form-error'].textContent = '';
+  elements['agent-preview-error'].textContent = '';
+  approvedDraft = null;
+}
+
+document.getElementById('open-agent-form').addEventListener('click', () => {
+  elements['agent-dialog'].showModal();
+  elements['agent-form'].elements.name.focus();
+});
+document.getElementById('close-agent-form').addEventListener('click', closeAgentDialog);
+document.getElementById('cancel-agent-form').addEventListener('click', closeAgentDialog);
+document.getElementById('back-agent-form').addEventListener('click', () => {
+  elements['agent-form'].hidden = false;
+  elements['agent-preview'].hidden = true;
+  elements['agent-preview-error'].textContent = '';
+  approvedDraft = null;
+});
+
+elements['agent-form'].addEventListener('submit', async (event) => {
+  event.preventDefault();
+  elements['agent-form-error'].textContent = '';
+  const draft = Object.fromEntries(new FormData(elements['agent-form']));
+  draft.budget = Number(draft.budget || 0);
+  try {
+    const preview = await postJSON('/api/v1/agents/preview', draft);
+    approvedDraft = { ...draft, approved_content: preview.content };
+    elements['agent-preview-path'].textContent = preview.path;
+    elements['agent-preview-content'].textContent = preview.content;
+    elements['agent-form'].hidden = true;
+    elements['agent-preview'].hidden = false;
+  } catch (error) {
+    elements['agent-form-error'].textContent = error instanceof Error ? error.message : String(error);
+  }
+});
+
+elements['create-agent'].addEventListener('click', async () => {
+  if (!approvedDraft) return;
+  elements['agent-preview-error'].textContent = '';
+  elements['create-agent'].disabled = true;
+  try {
+    await postJSON('/api/v1/agents', approvedDraft);
+    closeAgentDialog();
+    await refresh();
+  } catch (error) {
+    elements['agent-preview-error'].textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    elements['create-agent'].disabled = false;
+  }
+});
 
 function showError(message) {
   elements.error.textContent = message;

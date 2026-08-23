@@ -15,11 +15,44 @@
     <section id="summary" class="summary" aria-label="Portfolio summary"></section>
     <section class="panel"><h1>Goals</h1><div id="goals" class="cards"></div></section>
     <section class="panel">
-      <h1>Agents</h1>
+      <div class="panel-heading">
+        <div><h1>Agents</h1><p>Create one file. Keep full ownership.</p></div>
+        <button id="open-agent-form" class="button button-primary" type="button">New agent</button>
+      </div>
       <div class="table-wrap"><table><thead><tr><th>Agent</th><th>Goal</th><th>Schedule</th><th>Authority</th><th>Budget</th><th>Score</th><th>Decision</th><th>Last run</th></tr></thead><tbody id="agents"></tbody></table></div>
     </section>
     <section class="panel"><h1>Recent activity</h1><div id="activity" class="activity"></div></section>
   </main>
+  <dialog id="agent-dialog">
+    <div class="dialog-heading">
+      <div><span class="eyebrow">New file</span><h1>Create agent</h1></div>
+      <button id="close-agent-form" class="icon-button" type="button" aria-label="Close">×</button>
+    </div>
+    <form id="agent-form">
+      <div class="form-grid">
+        <label>Name<input name="name" required pattern="[a-z0-9][a-z0-9-]{0,62}" placeholder="repo-health" autocomplete="off"></label>
+        <label>Goal<select id="agent-goal" name="goal"><option value="">No goal</option></select></label>
+        <label>Schedule<input name="schedule" placeholder="Manual, or 1h" autocomplete="off"></label>
+        <label>Budget, USD<input name="budget" type="number" min="0" step="0.01" value="0"></label>
+        <label>Model<select name="model"><option value="sonnet">sonnet</option><option value="haiku">haiku</option><option value="opus">opus</option></select></label>
+      </div>
+      <label>Instructions<textarea name="instructions" required rows="7" placeholder="Find one important problem and explain the smallest safe fix."></textarea></label>
+      <p id="agent-form-error" class="form-error" role="alert"></p>
+      <div class="dialog-actions">
+        <button id="cancel-agent-form" class="button" type="button">Cancel</button>
+        <button class="button button-primary" type="submit">Preview file</button>
+      </div>
+    </form>
+    <section id="agent-preview" hidden>
+      <div class="preview-path"><span>Will create</span><strong id="agent-preview-path"></strong></div>
+      <pre id="agent-preview-content"></pre>
+      <p id="agent-preview-error" class="form-error" role="alert"></p>
+      <div class="dialog-actions">
+        <button id="back-agent-form" class="button" type="button">Back</button>
+        <button id="create-agent" class="button button-primary" type="button">Create agent</button>
+      </div>
+    </section>
+  </dialog>
   <script type="module" src="/app.js"></script>
 </body>
 </html>
