@@ -132,24 +132,10 @@ func cmdInit() error {
 	return nil
 }
 func cmdAdd(name string) error {
-	if err := os.MkdirAll(agentsDir, 0755); err != nil {
-		return err
-	}
-	path := filepath.Join(agentsDir, name+".md")
-	if _, err := os.Stat(path); err == nil {
-		return fmt.Errorf("%s already exists", path)
-	}
-	tmpl := fmt.Sprintf(`---
-name: %s
-schedule: ""
-model: sonnet
-permission_mode: default
-max_turns: 10
----
-# %s
-Describe what this agent should do.
-`, name, name)
-	if err := os.WriteFile(path, []byte(tmpl), 0644); err != nil {
+	path, err := agent.Create(agentsDir, agent.Draft{
+		Name: name, Instructions: "Describe what this agent should do.",
+	})
+	if err != nil {
 		return err
 	}
 	fmt.Printf("created %s\n", path)
