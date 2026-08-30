@@ -121,6 +121,11 @@ textarea { min-height: 140px; resize: vertical; line-height: 1.45; }
   font: 0.8125rem/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
   white-space: pre-wrap;
 }
+.run-panel { display: grid; gap: 14px; padding: 22px; }
+.run-status { display: flex; align-items: center; gap: 12px; }
+.run-details { display: flex; flex-wrap: wrap; gap: 8px 16px; color: #73716a; font-size: 0.8125rem; }
+.run-rating { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid #e2dfd5; }
+.rating-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
 .card, .activity-item { border-top: 1px solid #e2dfd5; padding: 14px 0; }
@@ -134,6 +139,8 @@ table { width: 100%; min-width: 920px; border-collapse: collapse; text-align: le
 th, td { padding: 12px 10px; border-top: 1px solid #e2dfd5; vertical-align: top; }
 th { color: #73716a; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
 td > small { display: block; margin-top: 4px; }
+.actions { white-space: nowrap; }
+.actions .button { min-height: 32px; padding: 6px 9px; }
 
 .activity { display: grid; }
 .activity-item { display: grid; gap: 8px; }

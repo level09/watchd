@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -48,6 +49,16 @@ type agentDraftRequest struct {
 type agentPreviewResponse struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
+}
+
+type runRequest struct {
+	Agent string `json:"agent"`
+}
+
+type outcomeRequest struct {
+	RunID string `json:"run_id"`
+	Value string `json:"value"`
+	Note  string `json:"note"`
 }
 
 func New(root, addr string, now func() time.Time) (*Server, error) {
@@ -117,6 +128,7 @@ func validateLoopback(addr string) error {
 
 func newHandler(root string, now func() time.Time) http.Handler {
 	mux := http.NewServeMux()
+	jobs := newJobManager(root)
 	mux.HandleFunc("GET /{$}", serveAsset("ui/index.html", "text/html; charset=utf-8"))
 	mux.HandleFunc("GET /app.js", serveAsset("ui/app.js", "text/javascript; charset=utf-8"))
 	mux.HandleFunc("GET /style.css", serveAsset("ui/style.css", "text/css; charset=utf-8"))
@@ -171,6 +183,57 @@ func newHandler(root string, now func() time.Time) http.Handler {
 			Path: filepath.ToSlash(filepath.Join("agents", filepath.Base(path))), Content: string(content),
 		})
 	})
+	mux.HandleFunc("POST /api/v1/runs", func(w http.ResponseWriter, r *http.Request) {
+		var request runRequest
+		if !readJSONRequest(w, r, &request) {
+			return
+		}
+		if strings.TrimSpace(request.Agent) == "" {
+			writeError(w, http.StatusBadRequest, "run_invalid", "agent is required")
+			return
+		}
+		job, err := jobs.Start(request.Agent)
+		if err != nil {
+			status, code := http.StatusInternalServerError, "run_failed"
+			switch {
+			case errors.Is(err, os.ErrNotExist):
+				status, code = http.StatusNotFound, "agent_not_found"
+			case errors.Is(err, errAgentRunning):
+				status, code = http.StatusConflict, "run_in_progress"
+			}
+			writeError(w, status, code, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, job)
+	})
+	mux.HandleFunc("GET /api/v1/runs/{jobID}", func(w http.ResponseWriter, r *http.Request) {
+		job, ok := jobs.Get(r.PathValue("jobID"))
+		if !ok {
+			writeError(w, http.StatusNotFound, "job_not_found", "run job not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, job)
+	})
+	mux.HandleFunc("POST /api/v1/outcomes", func(w http.ResponseWriter, r *http.Request) {
+		var request outcomeRequest
+		if !readJSONRequest(w, r, &request) {
+			return
+		}
+		if strings.TrimSpace(request.RunID) == "" || strings.TrimSpace(request.Value) == "" {
+			writeError(w, http.StatusBadRequest, "outcome_invalid", "run_id and value are required")
+			return
+		}
+		run, err := jobs.service.RateOutcome(request.RunID, request.Value, request.Note)
+		if err != nil {
+			status, code := http.StatusBadRequest, "outcome_invalid"
+			if strings.Contains(err.Error(), "not found") {
+				status, code = http.StatusNotFound, "run_not_found"
+			}
+			writeError(w, status, code, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, run)
+	})
 	mux.HandleFunc("GET /api/v1/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		snapshot, err := app.Snapshot(root, now())
 		if err != nil {
@@ -200,16 +263,36 @@ func readAgentDraft(w http.ResponseWriter, r *http.Request) (agent.Draft, agentD
 		return agent.Draft{}, agentDraftRequest{}, false
 	}
 	var request agentDraftRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "request_invalid", err.Error())
+	if !decodeJSON(w, r, &request) {
 		return agent.Draft{}, agentDraftRequest{}, false
 	}
 	return agent.Draft{
 		Name: request.Name, Goal: request.Goal, Schedule: request.Schedule,
 		Model: request.Model, Budget: request.Budget, Instructions: request.Instructions,
 	}, request, true
+}
+
+func readJSONRequest(w http.ResponseWriter, r *http.Request, value any) bool {
+	if !sameOrigin(r) {
+		writeError(w, http.StatusForbidden, "origin_forbidden", "request origin must match the dashboard")
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeError(w, http.StatusUnsupportedMediaType, "json_required", "content type must be application/json")
+		return false
+	}
+	return decodeJSON(w, r, value)
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, value any) bool {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		writeError(w, http.StatusBadRequest, "request_invalid", err.Error())
+		return false
+	}
+	return true
 }
 
 func sameOrigin(r *http.Request) bool {

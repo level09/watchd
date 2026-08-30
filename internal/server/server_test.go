@@ -195,7 +195,7 @@ func TestDashboardServesAgentCreationFlow(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	for _, hook := range []string{`id="open-agent-form"`, `id="agent-form"`, `id="agent-preview"`, "Preview file", "Create agent"} {
+	for _, hook := range []string{`id="open-agent-form"`, `id="agent-form"`, `id="agent-preview"`, `id="run-dialog"`, "Preview file", "Create agent", "Run now"} {
 		if !strings.Contains(response.Body.String(), hook) {
 			t.Fatalf("dashboard missing creation control %q", hook)
 		}
@@ -203,7 +203,7 @@ func TestDashboardServesAgentCreationFlow(t *testing.T) {
 
 	script := httptest.NewRecorder()
 	handler.ServeHTTP(script, httptest.NewRequest(http.MethodGet, "/app.js", nil))
-	for _, endpoint := range []string{"/api/v1/agents/preview", "/api/v1/agents"} {
+	for _, endpoint := range []string{"/api/v1/agents/preview", "/api/v1/agents", "/api/v1/runs", "/api/v1/outcomes"} {
 		if !strings.Contains(script.Body.String(), endpoint) {
 			t.Fatalf("dashboard script missing %q", endpoint)
 		}
@@ -240,6 +240,50 @@ func TestHandlerRejectsInvalidRequests(t *testing.T) {
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/missing", nil))
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestRunAPIQueuesKnownAgentAndRejectsUnknownAgent(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "agents/scan.md", "---\nname: scan\n---\nInspect.\n")
+	handler := newHandler(root, time.Now)
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(`{"agent":"missing"}`))
+	request.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("unknown status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/runs", strings.NewReader(`{"agent":"scan"}`))
+	request.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || !strings.Contains(response.Body.String(), `"agent":"scan"`) {
+		t.Fatalf("queue status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestOutcomeAPIValidatesAndRatesRun(t *testing.T) {
+	root := t.TempDir()
+	writeFixture(t, root, "runs/run-1.json", `{"id":"run-1","agent":"scan","status":"success","result":"done"}`)
+	handler := newHandler(root, time.Now)
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/outcomes", strings.NewReader(`{"run_id":"run-1","value":"useful","note":"clear"}`))
+	request.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"source":"human"`) {
+		t.Fatalf("rate status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	response = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/outcomes", strings.NewReader(`{"run_id":"run-1","value":"bad"}`))
+	request.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

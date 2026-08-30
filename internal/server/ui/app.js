@@ -4,6 +4,8 @@ const elements = Object.fromEntries(
     'mode', 'error', 'freshness', 'summary', 'goals', 'agents', 'activity',
     'agent-dialog', 'agent-form', 'agent-goal', 'agent-form-error', 'agent-preview',
     'agent-preview-path', 'agent-preview-content', 'agent-preview-error', 'create-agent',
+    'run-dialog', 'run-title', 'run-status', 'run-job', 'run-message', 'run-details',
+    'run-rating', 'run-note', 'run-rating-error',
   ]
     .map((id) => [id, document.getElementById(id)]),
 );
@@ -90,7 +92,7 @@ function renderAgents(agents) {
   if (agents.length === 0) {
     const row = node('tr');
     const cell = node('td', 'empty', 'No agents configured.');
-    cell.colSpan = 8;
+    cell.colSpan = 9;
     row.append(cell);
     elements.agents.replaceChildren(row);
     return;
@@ -108,6 +110,11 @@ function renderAgents(agents) {
     } else {
       lastRun.textContent = '-';
     }
+    const actions = node('td', 'actions');
+    const runButton = node('button', 'button', 'Run now');
+    runButton.type = 'button';
+    runButton.addEventListener('click', () => runAgent(agent.name));
+    actions.append(runButton);
     row.append(
       identity,
       node('td', null, agent.goal || '-'),
@@ -117,9 +124,70 @@ function renderAgents(agents) {
       node('td', 'score', score),
       node('td', null, agent.decision || '-'),
       lastRun,
+      actions,
     );
     return row;
   }));
+}
+
+function showRunDetails(run) {
+  elements['run-details'].hidden = false;
+  elements['run-details'].replaceChildren(
+    node('span', null, `Status: ${run.status || 'unknown'}`),
+    node('span', 'money', `Cost: ${money(run.cost_usd)}`),
+    node('span', 'count', `Duration: ${run.duration_ms || 0} ms`),
+  );
+  const result = run.error || run.result || 'No result recorded.';
+  elements['run-message'].textContent = result;
+}
+
+function resetRunDialog(agentName) {
+  elements['run-title'].textContent = `Run ${agentName}`;
+  elements['run-status'].textContent = 'Queued';
+  elements['run-status'].className = 'status status-pending';
+  elements['run-job'].textContent = '';
+  elements['run-message'].textContent = 'Starting run...';
+  elements['run-details'].hidden = true;
+  elements['run-details'].replaceChildren();
+  elements['run-rating'].hidden = true;
+  elements['run-note'].value = '';
+  elements['run-rating-error'].textContent = '';
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function runAgent(agentName) {
+  resetRunDialog(agentName);
+  elements['run-dialog'].showModal();
+  try {
+    const job = await postJSON('/api/v1/runs', { agent: agentName });
+    elements['run-job'].textContent = job.job_id;
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const response = await fetch(`/api/v1/runs/${encodeURIComponent(job.job_id)}`, { headers: { Accept: 'application/json' } });
+      const current = await response.json();
+      if (!response.ok) throw new Error(current.error?.message || `HTTP ${response.status}`);
+      elements['run-status'].textContent = current.status;
+      elements['run-status'].className = `status ${statusClass(current.status)}`;
+      if (current.status === 'complete') {
+        showRunDetails(current.run || {});
+        elements['run-rating'].hidden = !current.run || !['success', 'satisfied', 'incomplete', 'error'].includes(current.run.status);
+        await refresh();
+        return;
+      }
+      if (current.status === 'failed') {
+        elements['run-message'].textContent = current.error || 'Run failed.';
+        return;
+      }
+      await sleep(1500);
+    }
+    throw new Error('Run is taking longer than expected. Check recent activity for the result.');
+  } catch (error) {
+    elements['run-message'].textContent = error instanceof Error ? error.message : String(error);
+    elements['run-status'].textContent = 'Failed';
+    elements['run-status'].className = 'status status-error';
+  }
 }
 
 function renderActivity(runs) {
@@ -249,3 +317,23 @@ async function refresh() {
 
 refresh();
 setInterval(refresh, refreshInterval);
+
+document.getElementById('close-run').addEventListener('click', () => elements['run-dialog'].close());
+document.querySelectorAll('[data-rating]').forEach((button) => {
+  button.addEventListener('click', async () => {
+    const value = button.dataset.rating;
+    const runID = elements['run-job'].textContent;
+    const note = elements['run-note'].value.trim();
+    elements['run-rating-error'].textContent = '';
+    try {
+      const job = await fetch(`/api/v1/runs/${encodeURIComponent(runID)}`, { headers: { Accept: 'application/json' } }).then((response) => response.json());
+      if (!job.run?.id) throw new Error('Run result is not ready.');
+      await postJSON('/api/v1/outcomes', { run_id: job.run.id, value, note });
+      elements['run-rating'].hidden = true;
+      elements['run-message'].textContent = `Marked ${value}. This signal will improve the next decision.`;
+      await refresh();
+    } catch (error) {
+      elements['run-rating-error'].textContent = error instanceof Error ? error.message : String(error);
+    }
+  });
+});
