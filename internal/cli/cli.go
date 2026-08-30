@@ -11,6 +11,7 @@ import (
 	"github.com/level09/watchd/internal/portfolio"
 	"github.com/level09/watchd/internal/runner"
 	"github.com/level09/watchd/internal/server"
+	"github.com/level09/watchd/internal/service"
 	"github.com/level09/watchd/internal/store"
 	"os"
 	"os/exec"
@@ -146,18 +147,8 @@ func cmdRun(name string) error {
 	if err != nil {
 		return err
 	}
-	resolved, allocation, err := admitAgent(a, false)
-	if err != nil {
-		return err
-	}
-	s := store.New(".")
 	fmt.Printf("running %s...\n", a.Name)
-	var run *store.Run
-	if resolved == nil {
-		run, err = runner.Run(a, s)
-	} else {
-		run, err = runner.RunResolved(resolved, allocation, s)
-	}
+	run, err := service.New(".").RunAgent(name)
 	if err != nil {
 		return err
 	}
@@ -180,22 +171,9 @@ func cmdList() error {
 	return nil
 }
 func cmdOutcome(id, value, note string) error {
-	run, err := store.New(".").AppendOutcome(id, store.OutcomeRating{
-		Value: value, Source: "human", Note: note, RatedAt: time.Now(),
-	})
+	run, err := service.New(".").RateOutcome(id, value, note)
 	if err != nil {
 		return err
-	}
-	if value == "harmful" {
-		a, err := loadAgent(run.Agent)
-		if err != nil {
-			return err
-		}
-		if a.Notify != "" {
-			if err := runner.Notify(a.Notify, run, value); err != nil {
-				return fmt.Errorf("notify %s: %w", run.Agent, err)
-			}
-		}
 	}
 	fmt.Printf("rated %s %s\n", run.ID, value)
 	return nil
@@ -446,7 +424,7 @@ func cmdApprove(id string) error {
 			return nil
 		}
 	}
-	resolved, allocation, err := admitAgent(a, true)
+	resolved, allocation, err := service.New(".").AdmitAgent(a, true)
 	if err != nil {
 		return err
 	}
@@ -515,71 +493,6 @@ func cmdReject(id string) error {
 	}
 	fmt.Printf("rejected %s\n", id)
 	return nil
-}
-func admitAgent(a *agent.Agent, approval bool) (*portfolio.ResolvedAgent, *store.Allocation, error) {
-	policy, err := portfolio.LoadPolicy("watchd.yaml")
-	if err != nil || policy == nil {
-		return nil, nil, err
-	}
-	if a.Goal == "" {
-		if a.Budget <= 0 {
-			return nil, nil, fmt.Errorf("legacy agent %q needs a positive budget in portfolio mode", a.Name)
-		}
-		runs, err := store.New(".").GetRuns("", 0)
-		if err != nil {
-			return nil, nil, err
-		}
-		spent := 0.0
-		now := time.Now()
-		for _, run := range runs {
-			local := run.StartedAt.In(now.Location())
-			if local.Year() == now.Year() && local.YearDay() == now.YearDay() {
-				spent += run.CostUSD
-			}
-		}
-		if policy.DailyBudget-spent < a.Budget {
-			return nil, nil, fmt.Errorf("global daily budget exhausted")
-		}
-		authority := "act"
-		if a.Gate {
-			authority = "propose"
-		}
-		resolved := &portfolio.ResolvedAgent{Agent: a, Authority: authority}
-		return resolved, &store.Allocation{ReservedUSD: a.Budget, EstimatedCostUSD: a.Budget, RemainingUSD: policy.DailyBudget - spent, Reason: "manual legacy run"}, nil
-	}
-	goals, err := portfolio.DiscoverGoals("goals")
-	if err != nil {
-		return nil, nil, err
-	}
-	resolved, err := portfolio.Resolve(a, goals, policy)
-	if err != nil {
-		return nil, nil, err
-	}
-	if approval {
-		if resolved.Authority == "observe" {
-			return nil, nil, fmt.Errorf("agent %q cannot be approved: goal authority is observe", a.Name)
-		}
-		copy := *resolved
-		copy.Authority = "act"
-		resolved = &copy
-	}
-	runs, err := store.New(".").GetRuns("", 0)
-	if err != nil {
-		return nil, nil, err
-	}
-	snapshot, err := portfolio.BuildSnapshot(time.Now(), *policy, goals, []*portfolio.ResolvedAgent{resolved}, runs)
-	if err != nil {
-		return nil, nil, err
-	}
-	decision := portfolio.Decide(snapshot)[0]
-	if !decision.Admit {
-		return nil, nil, fmt.Errorf("agent %q not admitted: %s", a.Name, decision.Reason)
-	}
-	allocation := &store.Allocation{
-		Score: decision.Score, ReservedUSD: decision.ReservedUSD, EstimatedCostUSD: decision.EstimatedCostUSD,
-		RemainingUSD: decision.RemainingUSD, Reason: decision.Reason,
-	}
-	return resolved, allocation, nil
 }
 
 const pidFile = ".watchd.pid"

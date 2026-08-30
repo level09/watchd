@@ -21,6 +21,6 @@ commands:
   up            start scheduler (run eligible agents)
   stop          stop the scheduler started in this directory
   serve [--addr ADDRESS]
-                start local dashboard (default 127.0.0.1:7337)
+                start local dashboard with run and outcome controls (default 127.0.0.1:7337)
   help          show this help
   version       show version

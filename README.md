@@ -77,8 +77,9 @@ watchd approve <run-id>           # allow a proposed action
 Run `watchd serve`, then open `http://127.0.0.1:7337`. The dashboard shows
 goals, agents, allocation decisions, review debt, spend, and recent outcomes.
 Use **New agent** to preview the exact Markdown and approve creation of one
-`agents/<name>.md` file. It binds only to the local machine. Existing files
-remain the source of truth.
+`agents/<name>.md` file. Use **Run now** to start a local run, inspect its result,
+and mark it useful, neutral, or harmful. It binds only to the local machine.
+Existing files and the run ledger remain the source of truth.
 
 ## One night
 
@@ -347,7 +348,7 @@ On top of that, cron gives you none of the operational layer: no cost tracking, 
 | `watchd add <name>` | Scaffold a new agent |
 | `watchd edit <name>` | Open agent in `$EDITOR` |
 | `watchd run <name>` | Run an agent once |
-| `watchd serve [--addr ADDRESS]` | Start the local dashboard |
+| `watchd serve [--addr ADDRESS]` | Start the local dashboard with run and outcome controls |
 | `watchd up` | Start the scheduler |
 | `watchd stop` | Stop the scheduler started in this directory |
 | `watchd logs [name]` | Run history |
