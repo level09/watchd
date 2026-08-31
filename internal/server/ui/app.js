@@ -170,6 +170,9 @@ async function runAgent(agentName) {
       if (!response.ok) throw new Error(current.error?.message || `HTTP ${response.status}`);
       elements['run-status'].textContent = current.status;
       elements['run-status'].className = `status ${statusClass(current.status)}`;
+      if (current.status === 'running') {
+        elements['run-message'].textContent = 'Claude is working. Research runs can take a few minutes.';
+      }
       if (current.status === 'complete') {
         showRunDetails(current.run || {});
         elements['run-rating'].hidden = !current.run || !['success', 'satisfied', 'incomplete', 'error'].includes(current.run.status);

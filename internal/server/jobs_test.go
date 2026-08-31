@@ -1,8 +1,11 @@
 package server
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestJobManagerRejectsUnknownAgent(t *testing.T) {
@@ -32,4 +35,35 @@ func TestJobManagerReturnsMissingJob(t *testing.T) {
 	if job, ok := newJobManager(t.TempDir()).Get("missing"); ok || job != nil {
 		t.Fatalf("job=%+v ok=%v", job, ok)
 	}
+}
+
+func TestJobManagerCompletesRun(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	writeFixture(t, root, "agents/scan.md", "---\nname: scan\nmodel: haiku\n---\nInspect.\n")
+	bin := t.TempDir()
+	claude := filepath.Join(bin, "claude")
+	if err := os.WriteFile(claude, []byte("#!/bin/sh\nprintf '%s\\n' '[{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ready\"}]'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	manager := newJobManager(root)
+	job, err := manager.Start("scan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		current, ok := manager.Get(job.ID)
+		if ok && current.Status == "complete" {
+			if current.Run == nil || current.Run.Result != "ready" {
+				t.Fatalf("job = %+v", current)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	current, _ := manager.Get(job.ID)
+	t.Fatalf("job did not complete: %+v", current)
 }
