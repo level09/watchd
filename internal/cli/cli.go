@@ -8,7 +8,6 @@ import (
 	"github.com/level09/watchd/internal/agent"
 	"github.com/level09/watchd/internal/app"
 	"github.com/level09/watchd/internal/daemon"
-	"github.com/level09/watchd/internal/portfolio"
 	"github.com/level09/watchd/internal/runner"
 	"github.com/level09/watchd/internal/server"
 	"github.com/level09/watchd/internal/service"
@@ -380,101 +379,16 @@ func cmdPending() error {
 	return nil
 }
 func cmdApprove(id string) error {
-	s := store.New(".")
-	pending, err := s.GetRun(id)
-	if err != nil {
-		return err
-	}
-	if pending.Status != "pending" {
-		return fmt.Errorf("run %s is %s, not pending", id, pending.Status)
-	}
-	agents, err := agent.Discover(agentsDir)
-	if err != nil {
-		return err
-	}
-	a := agent.FindByName(agents, pending.Agent)
-	if a == nil {
-		return fmt.Errorf("agent %q not found in %s/", pending.Agent, agentsDir)
-	}
-	if err := validatePendingStrategy(pending, a); err != nil {
-		return err
-	}
-	if a.Verify != "" {
-		verification, verifyErr := runner.RunVerifier(a.Verify, a.VerificationTimeout())
-		if verifyErr != nil {
-			failure := &store.Run{Agent: a.Name, Goal: pending.Goal, GoalHash: pending.GoalHash, AgentHash: a.Hash, Allocation: pending.Allocation, Status: "error", Error: verifyErr.Error(), VerificationBefore: verification, StartedAt: time.Now()}
-			if failure.Allocation == nil {
-				failure.Allocation = &store.Allocation{Reason: "approval preflight failed before admission"}
-			}
-			if err := s.SaveRun(failure); err != nil {
-				return err
-			}
-			if a.Notify != "" {
-				_ = runner.Notify(a.Notify, failure, "error")
-			}
-			return verifyErr
-		}
-		if verification.Passed {
-			pending.Status = "superseded"
-			pending.VerificationAfter = verification
-			if err := s.SaveRun(pending); err != nil {
-				return err
-			}
-			fmt.Printf("superseded %s: goal already satisfied\n", id)
-			return nil
-		}
-	}
-	resolved, allocation, err := service.New(".").AdmitAgent(a, true)
-	if err != nil {
-		return err
-	}
 	fmt.Printf("approving %s, executing plan...\n", id)
-	var run *store.Run
-	if resolved == nil {
-		run, err = runner.Approve(a, pending, s)
-	} else {
-		run, err = runner.ApproveResolvedWithAllocation(resolved, allocation, pending, s)
-	}
+	run, err := service.New(".").ApproveRun(id)
 	if err != nil {
 		return err
+	}
+	if run.Status == "superseded" {
+		fmt.Printf("superseded %s: goal already satisfied\n", id)
+		return nil
 	}
 	runner.PrintRun(run)
-	return nil
-}
-func validatePendingStrategy(pending *store.Run, a *agent.Agent) error {
-	if pending.AgentHash != "" && pending.AgentHash != a.Hash {
-		return fmt.Errorf("run %s strategy changed: agent instructions no longer match the pending plan", pending.ID)
-	}
-	policy, err := portfolio.LoadPolicy("watchd.yaml")
-	if err != nil {
-		return err
-	}
-	if policy == nil {
-		if pending.GoalHash != "" || (pending.Goal != "" && a.Goal == "") {
-			return fmt.Errorf("run %s strategy changed: goal no longer matches the pending plan", pending.ID)
-		}
-		return nil
-	}
-	if a.Goal == "" {
-		if pending.GoalHash != "" || pending.Goal != "" {
-			return fmt.Errorf("run %s strategy changed: goal no longer matches the pending plan", pending.ID)
-		}
-		return nil
-	}
-	goals, err := portfolio.DiscoverGoals("goals")
-	if err != nil {
-		return err
-	}
-	resolved, err := portfolio.Resolve(a, goals, policy)
-	if err != nil {
-		return err
-	}
-	if pending.GoalHash != "" && pending.GoalHash != resolved.Goal.Hash {
-		return fmt.Errorf("run %s strategy changed: goal definition no longer matches the pending plan", pending.ID)
-	}
-	if pending.Goal != "" && pending.Goal != resolved.Goal.Name {
-		return fmt.Errorf("run %s strategy changed: goal reference no longer matches the pending plan", pending.ID)
-	}
 	return nil
 }
 func cmdReject(id string) error {

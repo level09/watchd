@@ -203,7 +203,7 @@ func TestDashboardServesAgentCreationFlow(t *testing.T) {
 
 	script := httptest.NewRecorder()
 	handler.ServeHTTP(script, httptest.NewRequest(http.MethodGet, "/app.js", nil))
-	for _, endpoint := range []string{"/api/v1/agents/preview", "/api/v1/agents", "/api/v1/runs", "/api/v1/outcomes"} {
+	for _, endpoint := range []string{"/api/v1/agents/preview", "/api/v1/agents", "/api/v1/runs", "/api/v1/outcomes", "/api/v1/approvals"} {
 		if !strings.Contains(script.Body.String(), endpoint) {
 			t.Fatalf("dashboard script missing %q", endpoint)
 		}

@@ -53,6 +53,27 @@ func TestRunAgentReportsMissingAgent(t *testing.T) {
 	}
 }
 
+func TestApproveRunExecutesPendingPlan(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	writeServiceFixture(t, "agents/scan.md", "---\nname: scan\nmodel: haiku\n---\nInspect.")
+	writeServiceFixture(t, "runs/run-1.json", `{"id":"run-1","agent":"scan","status":"pending","session_id":"session-1"}`)
+	claudeDir := t.TempDir()
+	claude := filepath.Join(claudeDir, "claude")
+	if err := os.WriteFile(claude, []byte("#!/bin/sh\nprintf '%s\\n' '[{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"approved\"}]'\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", claudeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	run, err := New(root).ApproveRun("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "success" || run.Result != "approved" {
+		t.Fatalf("run = %+v", run)
+	}
+}
+
 func writeServiceFixture(t *testing.T, name, content string) {
 	t.Helper()
 	path := name

@@ -58,6 +58,97 @@ func (s *Service) RateOutcome(id, value, note string) (*store.Run, error) {
 	return run, nil
 }
 
+func (s *Service) ApproveRun(id string) (*store.Run, error) {
+	ledger := store.New(s.root)
+	pending, err := ledger.GetRun(id)
+	if err != nil {
+		return nil, err
+	}
+	if pending.Status != "pending" {
+		return nil, fmt.Errorf("run %s is %s, not pending", id, pending.Status)
+	}
+	agents, err := agent.Discover(filepath.Join(s.root, "agents"))
+	if err != nil {
+		return nil, err
+	}
+	a := agent.FindByName(agents, pending.Agent)
+	if a == nil {
+		return nil, fmt.Errorf("agent %q not found in agents/", pending.Agent)
+	}
+	if err := validatePendingStrategy(s.root, pending, a); err != nil {
+		return nil, err
+	}
+	if a.Verify != "" {
+		verification, verifyErr := runner.RunVerifier(a.Verify, a.VerificationTimeout())
+		if verifyErr != nil {
+			failure := &store.Run{Agent: a.Name, Goal: pending.Goal, GoalHash: pending.GoalHash, AgentHash: a.Hash, Allocation: pending.Allocation, Status: "error", Error: verifyErr.Error(), VerificationBefore: verification, StartedAt: time.Now()}
+			if failure.Allocation == nil {
+				failure.Allocation = &store.Allocation{Reason: "approval preflight failed before admission"}
+			}
+			if err := ledger.SaveRun(failure); err != nil {
+				return nil, err
+			}
+			if a.Notify != "" {
+				_ = runner.Notify(a.Notify, failure, "error")
+			}
+			return failure, verifyErr
+		}
+		if verification.Passed {
+			pending.Status = "superseded"
+			pending.VerificationAfter = verification
+			if err := ledger.SaveRun(pending); err != nil {
+				return nil, err
+			}
+			return pending, nil
+		}
+	}
+	resolved, allocation, err := s.AdmitAgent(a, true)
+	if err != nil {
+		return nil, err
+	}
+	if resolved == nil {
+		return runner.Approve(a, pending, ledger)
+	}
+	return runner.ApproveResolvedWithAllocation(resolved, allocation, pending, ledger)
+}
+
+func validatePendingStrategy(root string, pending *store.Run, a *agent.Agent) error {
+	if pending.AgentHash != "" && pending.AgentHash != a.Hash {
+		return fmt.Errorf("run %s strategy changed: agent instructions no longer match the pending plan", pending.ID)
+	}
+	policy, err := portfolio.LoadPolicy(filepath.Join(root, "watchd.yaml"))
+	if err != nil {
+		return err
+	}
+	if policy == nil {
+		if pending.GoalHash != "" || (pending.Goal != "" && a.Goal == "") {
+			return fmt.Errorf("run %s strategy changed: goal no longer matches the pending plan", pending.ID)
+		}
+		return nil
+	}
+	if a.Goal == "" {
+		if pending.GoalHash != "" || pending.Goal != "" {
+			return fmt.Errorf("run %s strategy changed: goal no longer matches the pending plan", pending.ID)
+		}
+		return nil
+	}
+	goals, err := portfolio.DiscoverGoals(filepath.Join(root, "goals"))
+	if err != nil {
+		return err
+	}
+	resolved, err := portfolio.Resolve(a, goals, policy)
+	if err != nil {
+		return err
+	}
+	if pending.GoalHash != "" && pending.GoalHash != resolved.Goal.Hash {
+		return fmt.Errorf("run %s strategy changed: goal definition no longer matches the pending plan", pending.ID)
+	}
+	if pending.Goal != "" && pending.Goal != resolved.Goal.Name {
+		return fmt.Errorf("run %s strategy changed: goal reference no longer matches the pending plan", pending.ID)
+	}
+	return nil
+}
+
 func (s *Service) AdmitAgent(a *agent.Agent, approval bool) (*portfolio.ResolvedAgent, *store.Allocation, error) {
 	policy, err := portfolio.LoadPolicy(filepath.Join(s.root, "watchd.yaml"))
 	if err != nil || policy == nil {

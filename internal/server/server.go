@@ -61,6 +61,10 @@ type outcomeRequest struct {
 	Note  string `json:"note"`
 }
 
+type approvalRequest struct {
+	RunID string `json:"run_id"`
+}
+
 func New(root, addr string, now func() time.Time) (*Server, error) {
 	if err := validateLoopback(addr); err != nil {
 		return nil, err
@@ -226,6 +230,26 @@ func newHandler(root string, now func() time.Time) http.Handler {
 		run, err := jobs.service.RateOutcome(request.RunID, request.Value, request.Note)
 		if err != nil {
 			status, code := http.StatusBadRequest, "outcome_invalid"
+			if strings.Contains(err.Error(), "not found") {
+				status, code = http.StatusNotFound, "run_not_found"
+			}
+			writeError(w, status, code, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, run)
+	})
+	mux.HandleFunc("POST /api/v1/approvals", func(w http.ResponseWriter, r *http.Request) {
+		var request approvalRequest
+		if !readJSONRequest(w, r, &request) {
+			return
+		}
+		if strings.TrimSpace(request.RunID) == "" {
+			writeError(w, http.StatusBadRequest, "approval_invalid", "run_id is required")
+			return
+		}
+		run, err := jobs.service.ApproveRun(request.RunID)
+		if err != nil {
+			status, code := http.StatusBadRequest, "approval_invalid"
 			if strings.Contains(err.Error(), "not found") {
 				status, code = http.StatusNotFound, "run_not_found"
 			}

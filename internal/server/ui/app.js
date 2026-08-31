@@ -160,9 +160,13 @@ function showNextStep(run) {
   elements['run-next'].hidden = false;
   elements['run-next'].replaceChildren();
   if (run.status === 'pending') {
+    const approve = node('button', 'button button-primary', 'Approve plan');
+    approve.type = 'button';
+    approve.addEventListener('click', () => approveRun(run.id));
     elements['run-next'].append(
       node('strong', null, 'Approval required'),
-      node('span', null, `Review the plan, then run: watchd approve ${run.id}`),
+      node('span', null, 'Review the plan. Approve it here when ready.'),
+      approve,
     );
     return;
   }
@@ -171,6 +175,22 @@ function showNextStep(run) {
       node('strong', null, 'Claude is not signed in'),
       node('span', null, 'Run claude /login in the same terminal, then retry.'),
     );
+  }
+}
+
+async function approveRun(runID) {
+  const button = elements['run-next'].querySelector('button');
+  if (button) button.disabled = true;
+  elements['run-message'].textContent = 'Rechecking the plan and running it...';
+  try {
+    const run = await postJSON('/api/v1/approvals', { run_id: runID });
+    showRunDetails(run);
+    showNextStep(run);
+    elements['run-rating'].hidden = !['success', 'satisfied', 'incomplete'].includes(run.status);
+    await refresh();
+  } catch (error) {
+    elements['run-message'].textContent = error instanceof Error ? error.message : String(error);
+    if (button) button.disabled = false;
   }
 }
 
