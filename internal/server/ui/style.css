@@ -124,6 +124,8 @@ textarea { min-height: 140px; resize: vertical; line-height: 1.45; }
 .run-panel { display: grid; gap: 14px; padding: 22px; }
 .run-status { display: flex; align-items: center; gap: 12px; }
 .run-details { display: flex; flex-wrap: wrap; gap: 8px 16px; color: #73716a; font-size: 0.8125rem; }
+.run-next { display: grid; gap: 5px; padding: 12px 14px; border-left: 3px solid #9a6415; color: #68665f; background: #fbf7ed; font-size: 0.8125rem; }
+.run-next strong { color: #292722; }
 .run-rating { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid #e2dfd5; }
 .rating-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 

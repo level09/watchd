@@ -5,7 +5,7 @@ const elements = Object.fromEntries(
     'agent-dialog', 'agent-form', 'agent-goal', 'agent-form-error', 'agent-preview',
     'agent-preview-path', 'agent-preview-content', 'agent-preview-error', 'create-agent',
     'run-dialog', 'run-title', 'run-status', 'run-job', 'run-message', 'run-details',
-    'run-rating', 'run-note', 'run-rating-error',
+    'run-next', 'run-rating', 'run-note', 'run-rating-error',
   ]
     .map((id) => [id, document.getElementById(id)]),
 );
@@ -149,9 +149,29 @@ function resetRunDialog(agentName) {
   elements['run-message'].textContent = 'Starting run...';
   elements['run-details'].hidden = true;
   elements['run-details'].replaceChildren();
+  elements['run-next'].hidden = true;
+  elements['run-next'].replaceChildren();
   elements['run-rating'].hidden = true;
   elements['run-note'].value = '';
   elements['run-rating-error'].textContent = '';
+}
+
+function showNextStep(run) {
+  elements['run-next'].hidden = false;
+  elements['run-next'].replaceChildren();
+  if (run.status === 'pending') {
+    elements['run-next'].append(
+      node('strong', null, 'Approval required'),
+      node('span', null, `Review the plan, then run: watchd approve ${run.id}`),
+    );
+    return;
+  }
+  if (run.status === 'error' && /not logged in/i.test(run.error || run.result || '')) {
+    elements['run-next'].append(
+      node('strong', null, 'Claude is not signed in'),
+      node('span', null, 'Run claude /login in the same terminal, then retry.'),
+    );
+  }
 }
 
 function sleep(milliseconds) {
@@ -175,7 +195,8 @@ async function runAgent(agentName) {
       }
       if (current.status === 'complete') {
         showRunDetails(current.run || {});
-        elements['run-rating'].hidden = !current.run || !['success', 'satisfied', 'incomplete', 'error'].includes(current.run.status);
+        showNextStep(current.run || {});
+        elements['run-rating'].hidden = !current.run || !['success', 'satisfied', 'incomplete'].includes(current.run.status);
         await refresh();
         return;
       }
