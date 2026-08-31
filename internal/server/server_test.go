@@ -195,7 +195,7 @@ func TestDashboardServesAgentCreationFlow(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
-	for _, hook := range []string{`id="open-agent-form"`, `id="agent-form"`, `id="agent-preview"`, `id="run-dialog"`, "Preview file", "Create agent", "Run now"} {
+	for _, hook := range []string{`id="open-agent-form"`, `id="agent-form"`, `id="agent-preview"`, `id="run-dialog"`, `id="run-next"`, "Preview file", "Create agent", "Run now"} {
 		if !strings.Contains(response.Body.String(), hook) {
 			t.Fatalf("dashboard missing creation control %q", hook)
 		}
