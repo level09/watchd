@@ -1,0 +1,14 @@
+{
+  "name": "job-board",
+  "prompt": "Read the jobs page below and pick postings for senior backend roles that are remote or within UTC-1 to UTC+3.\nCall seen with each posting URL and report only new ones: title, company, location, salary if listed, link.\n\nJobs page: https://jobs.example/backend",
+  "schedule": "0 8 * * *",
+  "budget": 0.03,
+  "model": null,
+  "tools": [
+    "fetch_page",
+    "seen"
+  ],
+  "max_steps": 8,
+  "memory": true,
+  "public": false
+}

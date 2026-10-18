@@ -1,0 +1,14 @@
+{
+  "name": "release-notes",
+  "prompt": "Read the release feeds below. Call seen with each release URL.\nFor new releases only, list breaking changes, security fixes and notable features, one short paragraph per release. Skip patch releases with nothing notable.\n\nFeeds:\n- https://code.example/project-a/releases.atom\n- https://code.example/project-b/releases.atom",
+  "schedule": "0 7 * * 1",
+  "budget": 0.05,
+  "model": null,
+  "tools": [
+    "fetch_page",
+    "seen"
+  ],
+  "max_steps": 12,
+  "memory": true,
+  "public": false
+}

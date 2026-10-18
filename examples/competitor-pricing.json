@@ -1,0 +1,14 @@
+{
+  "name": "competitor-pricing",
+  "prompt": "Open the pricing pages below. Record each plan's name, monthly price and main limits.\nCall seen with \"<page>|<plan>|<price>|<limits>\" and report only plans that are new, removed or changed, as a short table.\n\nPages:\n- https://vendor-a.example/pricing\n- https://vendor-b.example/pricing",
+  "schedule": "0 6 * * 1",
+  "budget": 0.05,
+  "model": null,
+  "tools": [
+    "browse",
+    "seen"
+  ],
+  "max_steps": 10,
+  "memory": true,
+  "public": false
+}

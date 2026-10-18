@@ -1,0 +1,14 @@
+{
+  "name": "price-watch",
+  "prompt": "Open the product page below and read the current price and stock status.\nCall seen with \"<price>|<in stock or not>\"; report only when that changes, giving the old and new value.\n\nProduct: https://shop.example/item/123",
+  "schedule": "0 */6 * * *",
+  "budget": 0.02,
+  "model": null,
+  "tools": [
+    "browse",
+    "seen"
+  ],
+  "max_steps": 6,
+  "memory": true,
+  "public": false
+}

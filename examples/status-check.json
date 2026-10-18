@@ -1,0 +1,14 @@
+{
+  "name": "status-check",
+  "prompt": "Read the status page below. Call seen with each open incident's ID and status.\nReport only new incidents or status changes, one line each. If all systems are operational and nothing changed, reply with nothing new.\n\nStatus page: https://status.example",
+  "schedule": "0 * * * *",
+  "budget": 0.01,
+  "model": null,
+  "tools": [
+    "fetch_page",
+    "seen"
+  ],
+  "max_steps": 4,
+  "memory": true,
+  "public": false
+}

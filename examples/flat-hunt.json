@@ -1,0 +1,16 @@
+{
+  "name": "flat-hunt",
+  "prompt": "Check the rental listings at the search URLs below for two-bedroom flats under $2,400 a month.\nFor each listing record seen with the key \"<listing URL>|<price>\", so a price drop counts as new.\nReport only new listings: price, size, area, availability, and the link. If nothing is new, reply with nothing new.\n\nSearch URLs:\n- https://listings.example/search?beds=2&max=2400",
+  "schedule": "0 7 * * *",
+  "budget": 0.05,
+  "model": null,
+  "tools": [
+    "browse",
+    "links",
+    "fetch_page",
+    "seen"
+  ],
+  "max_steps": 12,
+  "memory": true,
+  "public": false
+}

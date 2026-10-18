@@ -9,7 +9,8 @@
     "types": [
       "@cloudflare/workers-types",
       "@cloudflare/vitest-pool-workers/types",
-      "node"
+      "node",
+      "vite/client"
     ]
   },
   "include": ["src", "agents", "test", "vitest.config.ts"]

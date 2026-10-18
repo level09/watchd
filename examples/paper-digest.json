@@ -1,0 +1,15 @@
+{
+  "name": "paper-digest",
+  "prompt": "Search for research papers published in the last two days on solid-state battery recycling.\nCall seen with each paper's DOI or arXiv ID and summarise only new ones in two sentences each, noting whether data or code is open.",
+  "schedule": "0 18 * * 1-5",
+  "budget": 0.05,
+  "model": null,
+  "tools": [
+    "web_search",
+    "fetch_page",
+    "seen"
+  ],
+  "max_steps": 10,
+  "memory": true,
+  "public": false
+}

@@ -35,6 +35,27 @@ Then ask Claude to "create a watchd agent that checks X every morning". The MCP
 tools are `list_agents`, `get_agent`, `save_agent`, `run_agent`, `get_run` and
 `list_runs`.
 
+## Examples
+
+`examples/` holds ten starting points across different jobs, each a complete
+`save_agent` input. Swap the example URLs and topic for your own:
+
+| Agent | Schedule | Watches |
+| --- | --- | --- |
+| `flat-hunt` | daily 07:00 | rental listings under a price, new or cheaper |
+| `job-board` | daily 08:00 | new postings that match a role and time zone |
+| `price-watch` | every 6 hours | one product's price and stock |
+| `paper-digest` | weekdays 18:00 | new research papers on a topic |
+| `status-check` | hourly | new incidents on a status page |
+| `release-notes` | Mondays 07:00 | breaking changes and security fixes in release feeds |
+| `grant-deadlines` | Mondays 09:00 | open funding calls with near deadlines |
+| `event-tickets` | every 30 minutes | ticket availability for one event |
+| `competitor-pricing` | Mondays 06:00 | plan and price changes on pricing pages |
+| `news-topic` | daily 12:00 | news on a topic, deduplicated by URL |
+
+Paste one into the dashboard form, or ask Claude over MCP to "save the
+flat-hunt example from examples/ with my search URL".
+
 From a script: `POST /run/<agent>` with `Authorization: Bearer $RUN_TOKEN`
 queues a run; `GET /runs/<id>` returns it. Runs start within a minute.
 

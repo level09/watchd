@@ -1,0 +1,15 @@
+{
+  "name": "news-topic",
+  "prompt": "Search for news from the last 24 hours about municipal open data policy.\nCall seen with each article URL. For new articles give the headline, outlet, a one-sentence summary and the link. Leave out opinion pieces and reposts of the same story.",
+  "schedule": "0 12 * * *",
+  "budget": 0.04,
+  "model": null,
+  "tools": [
+    "web_search",
+    "fetch_page",
+    "seen"
+  ],
+  "max_steps": 8,
+  "memory": true,
+  "public": false
+}

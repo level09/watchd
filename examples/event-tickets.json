@@ -1,0 +1,14 @@
+{
+  "name": "event-tickets",
+  "prompt": "Open the event page below and check whether tickets are on sale and at what price tiers.\nCall seen with a compact summary of the tiers that are available. Report only when availability changes.\n\nEvent: https://tickets.example/event/42",
+  "schedule": "*/30 * * * *",
+  "budget": 0.02,
+  "model": null,
+  "tools": [
+    "browse",
+    "seen"
+  ],
+  "max_steps": 5,
+  "memory": true,
+  "public": false
+}
