@@ -15,6 +15,8 @@
     },
   ],
   "send_email": [{ "name": "EMAIL" }],
+  // Browser Run for the browse and links tools; quick actions only work remotely, even in wrangler dev.
+  "browser": { "binding": "BROWSER", "remote": true },
   "vars": {
     "DEFAULT_MODEL": "deepseek/deepseek-v4.1-flash",
     "DAILY_CAP_USD": "1.00",

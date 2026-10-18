@@ -2,9 +2,9 @@
 
 ## What is watchd?
 
-A Cloudflare Worker that runs small scheduled AI agents under a hard daily spend
-cap. Agents are TypeScript files; results live in D1, show on a dashboard, and
-optionally go out by email. The old Go CLI is at the `go-final` tag.
+A Cloudflare Worker that runs scheduled AI agents as tool loops (fetch, browser,
+search, dedup) under a hard spend cap. Agents live in D1 and are created from the
+dashboard or over MCP. The old Go CLI is at the `go-final` tag.
 
 ## Commands
 
@@ -18,25 +18,28 @@ npm run deploy           # only when explicitly asked
 ## Architecture
 
 ```
-src/index.ts   - startup validation, scheduled() tick, fetch() -> web
-src/run.ts     - reserve budget, fetch sources, call OpenRouter, settle, notify
-src/web.ts     - dashboard, token login, public report pages, POST /run/<agent>
-src/cron.ts    - five-field UTC cron matcher
-src/types.ts   - Env and Agent
-agents/        - one file per agent, registered in agents/index.ts
-migrations/    - D1 schema (runs, memory)
+src/index.ts       - scheduled() -> tick, fetch() -> web
+src/run.ts         - enqueue (cap reservation), tick, execute (the tool loop), notify
+src/tools.ts       - tool specs and implementations, htmlToText
+src/openrouter.ts  - one chat completion call
+src/agents.ts      - Agent zod schema and D1 storage
+src/web.ts         - dashboard, agent forms, token login, public pages, /run, /runs, /mcp routing
+src/mcp.ts         - stateless MCP server (streamable HTTP, JSON responses)
+src/markdown.ts    - escaped markdown subset for reports
+src/cron.ts        - five-field UTC cron matcher
+migrations/        - D1 schema
 ```
 
 ## Key patterns
 
-- One `* * * * *` trigger; each agent's own cron decides if it runs that minute. Cron CPU limit is 30s for sub-hourly triggers, but waiting on the model does not count; wall time is 15 min
-- The cap is one `INSERT ... SELECT ... WHERE` statement: today's settled costs plus open reservations plus this budget must fit `DAILY_CAP_USD`. `UNIQUE (agent, slot)` stops a retried tick from running twice
-- Cost comes from OpenRouter `usage.cost`; a run that fails without a known cost is charged its full reservation
-- Memory: the agent ends its reply with `===MEMORY===` and its updated notes; no marker keeps the old notes
-- A reply of exactly `NOTHING` is stored but not emailed or published
-- Source text and memory are wrapped in tags and declared data, not instructions
-- `RUN_TOKEN` (24+ chars, required) gates everything private: bearer for scripts, a SameSite=Strict cookie holding a hash of the token for the dashboard
-- Public pages show only `ok` outputs, never costs or errors
-- Email is optional: no `NOTIFY_EMAIL` means no email
-- No `secrets.required` block on purpose: it blocks the first deploy until secrets exist and makes local dev drop undeclared `.dev.vars` entries. The Worker fails closed instead (500 without a strong `RUN_TOKEN`, failed run without `OPENROUTER_API_KEY`)
-- Keep `compatibility_date` at or below what the installed workerd supports, or tests and `wrangler dev` fail to start
+- Everything runs through the queue: schedules and "Run now" insert a `queued` run; the every-minute tick claims queued runs with a conditional UPDATE and executes them. HTTP requests never run the loop, because `waitUntil` only gets 30s
+- The cap is one `INSERT ... SELECT ... WHERE`: today's settled costs plus open reservations plus this budget must fit `DAILY_CAP_USD`. `UNIQUE (agent, slot)` stops a retried tick from running twice
+- The tick retires runs stuck in `running` for 20+ minutes (cron wall time is 15) and charges their reservation
+- The loop checks the run budget between model calls, so one call can overshoot; at `max_steps` it sends `tool_choice: "none"` and asks for the final answer
+- Tool errors go back to the model as text; only provider failures, budget, or a missing final answer fail a run
+- `seen` is deterministic dedup by agent and key; model memory (`===MEMORY===`, split on the first marker) is for soft context only
+- Tool results and memory are declared untrusted data in the system prompt; reports are escaped before markdown rendering
+- Browser Run quick actions need `"remote": true` on the binding even in `wrangler dev`
+- `RUN_TOKEN` (24+ chars) gates everything private: bearer for scripts and MCP, a SameSite=Strict cookie holding a hash of the token for the dashboard
+- No `secrets.required` block on purpose: it blocks the first deploy until secrets exist and makes local dev drop undeclared `.dev.vars` entries; wrangler reads only `.dev.vars` when it exists, not process env
+- Keep `compatibility_date` at or below what the installed workerd supports, and at or above 2026-03-24 for Browser Run quick actions

@@ -1,91 +1,107 @@
 import { env } from "cloudflare:workers";
-import { afterEach, expect, it, vi } from "vitest";
-import { runAgent } from "../src/run";
-import type { Agent, Env } from "../src/types";
+import { expect, it } from "vitest";
+import { enqueue, execute, tick } from "../src/run";
+import { agent, call, final, run, setup, steps } from "./helpers";
 
-const agent: Agent = {
-  name: "scout",
-  schedule: "* * * * *",
-  budget: 0.06,
-  prompt: "Report releases.",
-  memory: true,
-  sources: ["https://example.test/feed"],
-};
 
-function setup(reply: string | Response, cap = "1.00", notifyEmail = "me@example.test") {
-  vi.restoreAllMocks();
-  const send = vi.fn().mockResolvedValue({ messageId: "m" });
-  const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) =>
-    String(input).startsWith("https://example.test")
-      ? new Response("<feed>v2 released</feed>")
-      : reply instanceof Response
-        ? reply
-        : Response.json({ choices: [{ message: { content: reply } }], usage: { cost: 0.012 } }),
-  );
-  return { send, fetch, env: { ...env, DAILY_CAP_USD: cap, EMAIL: { send }, NOTIFY_EMAIL: notifyEmail, EMAIL_FROM: "watchd@example.test" } as Env };
-}
+it("loops through tools, dedups with seen, settles the summed cost and keeps memory", async () => {
+  const a = await agent("jobs");
+  const t = setup([
+    call("fetch_page", { url: "https://jobs.test/list" }),
+    call("seen", { keys: ["https://jobs.test/1", "https://jobs.test/2"] }, "c2"),
+    final("**Go dev** https://jobs.test/1\n===MEMORY===\n- reported jobs/1\n===MEMORY==="),
+  ]);
+  await env.DB.prepare("INSERT INTO seen (agent, key) VALUES ('jobs', 'https://jobs.test/2')").run();
+  const q = await enqueue(t.env, a, Date.UTC(2026, 9, 1, 7));
+  if (q.status !== "queued") throw new Error("not queued");
+  await execute(t.env, q.id);
 
-const row = (slot: number) =>
-  env.DB.prepare("SELECT status, cost, output, error FROM runs WHERE slot = ?").bind(slot).first();
-const memory = () =>
-  env.DB.prepare("SELECT body FROM memory WHERE agent = 'scout'").first<string>("body");
-
-afterEach(() => vi.restoreAllMocks());
-
-it("runs, settles actual cost, stores memory and emails the output", async () => {
-  const t = setup("v2 is out.\n===MEMORY===\n- reported v2");
-  const slot = Date.UTC(2026, 9, 1, 7);
-  expect(await runAgent(t.env, agent, slot)).toEqual({ status: "ok", cost: 0.012, output: "v2 is out." });
-  expect(await row(slot)).toEqual({ status: "ok", cost: 0.012, output: "v2 is out.", error: null });
-  expect(await memory()).toBe("- reported v2");
-  expect(t.send).toHaveBeenCalledWith(expect.objectContaining({ subject: "[watchd] scout 2026-10-01", text: "v2 is out." }));
-  const prompt = JSON.parse(t.fetch.mock.calls[1][1]!.body as string).messages[1].content;
-  expect(prompt).toContain('<source url="https://example.test/feed">\n<feed>v2 released</feed>');
+  expect(await run(q.id)).toEqual({ status: "ok", cost: 0.004, output: "**Go dev** https://jobs.test/1", error: null });
+  expect((await steps(q.id)).map((s) => s.tool)).toEqual(["model", "fetch_page", "model", "seen", "model"]);
+  // The page came back as readable text, and seen reported only the unseen key.
+  const toolMessages = (t.bodies[2].messages as { role: string; content: string }[]).filter((m) => m.role === "tool");
+  expect(toolMessages[0].content).toContain("Go dev (https://jobs.test/1)");
+  expect(toolMessages[1].content).toBe('{"new":["https://jobs.test/1"],"already_seen":["https://jobs.test/2"]}');
+  expect(t.bodies[0].tools).toHaveLength(2);
+  expect(await env.DB.prepare("SELECT body FROM memory WHERE agent = 'jobs'").first("body")).toBe("- reported jobs/1");
+  expect(t.send).toHaveBeenCalledWith(expect.objectContaining({ subject: "[watchd] jobs 2026-10-01" }));
 });
 
-it("skips a duplicate slot without calling the model", async () => {
+it("refuses a duplicate slot and a run that would break the daily cap", async () => {
+  const a = await agent("capped", { budget: 0.6 });
+  const t = setup([], { DAILY_CAP_USD: "1.00" });
   const slot = Date.UTC(2026, 9, 2, 7);
-  await runAgent(setup("first").env, agent, slot);
-  const t = setup("second");
-  expect(await runAgent(t.env, agent, slot)).toEqual({ status: "skipped", reason: "duplicate_slot" });
-  expect(t.fetch).not.toHaveBeenCalled();
+  expect((await enqueue(t.env, a, slot)).status).toBe("queued");
+  expect(await enqueue(t.env, a, slot)).toEqual({ status: "skipped", reason: "duplicate_slot" });
+  expect(await enqueue(t.env, a, slot + 1)).toEqual({ status: "skipped", reason: "daily_cap" });
 });
 
-it("refuses a run that would push the day past the cap", async () => {
-  const day = Date.UTC(2026, 9, 3, 7);
-  expect((await runAgent(setup("ok", "0.10").env, agent, day)).status).toBe("ok"); // settles at 0.012
-  expect((await runAgent(setup("ok", "0.10").env, agent, day + 1)).status).toBe("ok"); // 0.024
-  const t = setup("ok", "0.07");
-  expect(await runAgent(t.env, agent, day + 2)).toEqual({ status: "skipped", reason: "daily_cap" });
-  expect(t.fetch).not.toHaveBeenCalled();
+it("stops when the run budget is spent", async () => {
+  const a = await agent("spender", { budget: 0.01 });
+  const t = setup([call("fetch_page", { url: "https://jobs.test/x" }, "c1", 0.02)]);
+  const q = await enqueue(t.env, a, Date.UTC(2026, 9, 3, 7));
+  if (q.status !== "queued") throw new Error("not queued");
+  await execute(t.env, q.id);
+  expect(await run(q.id)).toMatchObject({ status: "error", error: "budget_exhausted", cost: 0.02 });
+  expect(t.send).toHaveBeenCalledWith(expect.objectContaining({ subject: "[watchd] spender failed" }));
 });
 
-it("charges the reservation on failure, keeps memory and reports the error", async () => {
-  await env.DB.prepare("INSERT OR REPLACE INTO memory (agent, body) VALUES ('scout', 'keep me')").run();
-  const t = setup(new Response("upstream down", { status: 502 }));
-  const slot = Date.UTC(2026, 9, 4, 7);
-  expect(await runAgent(t.env, agent, slot)).toEqual({ status: "error", reason: "openrouter_http_502 upstream down" });
-  expect(await row(slot)).toMatchObject({ status: "error", cost: 0.06 });
-  expect(await memory()).toBe("keep me");
-  expect(t.send).toHaveBeenCalledWith(expect.objectContaining({ subject: "[watchd] scout failed" }));
+it("forces a final answer at the step limit and reports disabled tools back to the model", async () => {
+  const a = await agent("limited", { max_steps: 2, tools: ["fetch_page"] });
+  const t = setup([call("web_search", { query: "go jobs" }), final("Done.")]);
+  const q = await enqueue(t.env, a, Date.UTC(2026, 9, 4, 7));
+  if (q.status !== "queued") throw new Error("not queued");
+  await execute(t.env, q.id);
+  expect(await run(q.id)).toMatchObject({ status: "ok", output: "Done." });
+  expect(t.bodies[1].tool_choice).toBe("none");
+  const tool = (t.bodies[1].messages as { role: string; content: string }[]).find((m) => m.role === "tool");
+  expect(tool?.content).toBe("error: tool web_search is not enabled for this agent");
 });
 
-it("stays quiet when the agent has nothing to report", async () => {
-  const t = setup("NOTHING\n===MEMORY===\n- nothing new");
-  expect((await runAgent(t.env, agent, Date.UTC(2026, 9, 5, 7))).status).toBe("ok");
+it("charges the reservation on provider failure and keeps old memory", async () => {
+  const a = await agent("flaky");
+  await env.DB.prepare("INSERT OR REPLACE INTO memory (agent, body) VALUES ('flaky', 'keep me')").run();
+  const t = setup([new Response("upstream down", { status: 502 })]);
+  const q = await enqueue(t.env, a, Date.UTC(2026, 9, 5, 7));
+  if (q.status !== "queued") throw new Error("not queued");
+  await execute(t.env, q.id);
+  expect(await run(q.id)).toMatchObject({ status: "error", error: "openrouter_http_502 upstream down", cost: 0.05 });
+  expect(await env.DB.prepare("SELECT body FROM memory WHERE agent = 'flaky'").first("body")).toBe("keep me");
+});
+
+it("claims a run once, stays quiet on NOTHING, and keeps a run ok when email fails", async () => {
+  const a = await agent("quiet", { tools: [] });
+  const t = setup([final("NOTHING")]);
+  t.send.mockRejectedValue(new Error("smtp down"));
+  const q = await enqueue(t.env, a, Date.UTC(2026, 9, 6, 7));
+  if (q.status !== "queued") throw new Error("not queued");
+  await Promise.all([execute(t.env, q.id), execute(t.env, q.id)]);
+  expect(t.bodies).toHaveLength(1);
+  expect(t.bodies[0].tools).toBeUndefined();
+  expect(await run(q.id)).toMatchObject({ status: "ok", output: "NOTHING" });
   expect(t.send).not.toHaveBeenCalled();
+
+  const t2 = setup([final("Report.")]);
+  t2.send.mockRejectedValue(new Error("smtp down"));
+  const q2 = await enqueue(t2.env, a, Date.UTC(2026, 9, 6, 8));
+  if (q2.status !== "queued") throw new Error("not queued");
+  await execute(t2.env, q2.id);
+  expect(await run(q2.id)).toMatchObject({ status: "ok", output: "Report." });
 });
 
-it("keeps results in D1 without emailing when NOTIFY_EMAIL is unset", async () => {
-  const t = setup("v3 is out.", "1.00", "");
-  const slot = Date.UTC(2026, 9, 6, 7);
-  expect((await runAgent(t.env, agent, slot)).status).toBe("ok");
-  expect(await row(slot)).toMatchObject({ status: "ok", output: "v3 is out." });
-  expect(t.send).not.toHaveBeenCalled();
-});
-
-it("splits on the first marker when the model also closes the memory block", async () => {
-  const t = setup("Report.\n===MEMORY===\n- seen v4\n===MEMORY===");
-  expect(await runAgent(t.env, agent, Date.UTC(2026, 9, 7, 7))).toMatchObject({ output: "Report." });
-  expect(await memory()).toBe("- seen v4");
+it("tick enqueues due agents, runs the queue and retires stuck runs", async () => {
+  await env.DB.prepare("UPDATE agents SET schedule = NULL").run();
+  await env.DB.prepare("UPDATE runs SET status = 'error' WHERE status = 'queued'").run();
+  await agent("daily", { schedule: "0 7 * * *", tools: [] });
+  await agent("other", { schedule: "0 9 * * *", tools: [] });
+  await env.DB.prepare(
+    "INSERT INTO runs (agent, slot, day, status, reserved, started_at) VALUES ('daily', 1, '2026-10-07', 'running', 0.05, datetime('now', '-30 minutes'))",
+  ).run();
+  const t = setup([final("Morning report.")]);
+  await tick(t.env, new Date(Date.UTC(2026, 9, 7, 7, 0)));
+  const rows = await env.DB.prepare("SELECT agent, status, error, cost FROM runs WHERE day = '2026-10-07' ORDER BY id").all();
+  expect(rows.results).toEqual([
+    { agent: "daily", status: "error", error: "timed_out", cost: 0.05 },
+    { agent: "daily", status: "ok", error: null, cost: 0.002 },
+  ]);
 });

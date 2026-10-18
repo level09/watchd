@@ -1,40 +1,50 @@
 # watchd
 
-Small AI agents on a schedule, with a hard spend cap. One Cloudflare Worker, D1,
-and OpenRouter.
+Small AI agents that run on a schedule, browse the web, and report back, with a
+hard spend cap. One Cloudflare Worker, D1, Browser Run, and OpenRouter.
 
-Each agent is a TypeScript file: a cron schedule, a budget, a prompt, and
-optional source URLs. When it is due, watchd fetches the sources, makes one model
-call, stores the result, and optionally emails it to you. A dashboard shows spend,
-runs, and a "Run now" button. Agents marked `public` get a shareable report page.
+An agent is a prompt, a schedule, a budget, and a set of tools. When it is due,
+watchd runs a tool loop: the model fetches pages, renders JavaScript sites,
+searches, and checks which items it has already reported, then writes a markdown
+report. Reports show on the dashboard, optionally by email, and on a public page
+for agents marked public.
 
-## Add an agent
+## Tools
 
-```ts
-// agents/release-radar.ts
-import type { Agent } from "../src/types";
+| Tool | What it does |
+| --- | --- |
+| `fetch_page` | Plain HTTP GET, returned as readable text (HTML, feeds, JSON) |
+| `browse` | Real browser via Browser Run, page returned as markdown |
+| `links` | Real browser, every link on the page |
+| `web_search` | Web search through OpenRouter's `:online` models |
+| `seen` | Remembers item IDs per agent and returns only new ones |
 
-export default {
-  name: "release-radar",
-  schedule: "0 7 * * 1", // cron, UTC
-  budget: 0.05, // USD reserved per run
-  memory: true, // keep notes between runs
-  public: false, // true publishes reports at /p/release-radar
-  sources: ["https://github.com/honojs/hono/releases.atom"],
-  prompt: "List releases worth acting on, with links.",
-} satisfies Agent;
+## Create an agent
+
+From the dashboard: **New agent**, write the instructions, pick tools, set a cron
+schedule (UTC) or leave it empty for manual runs.
+
+From Claude Code, over MCP:
+
+```bash
+claude mcp add --transport http watchd https://watchd.<you>.workers.dev/mcp \
+  --header "Authorization: Bearer $WATCHD_RUN_TOKEN"
 ```
 
-Register it in `agents/index.ts` and deploy. A reply of exactly `NOTHING` stores
-the run without emailing. Append `:online` to a `model` slug for OpenRouter web
-search.
+Then ask Claude to "create a watchd agent that checks X every morning". The MCP
+tools are `list_agents`, `get_agent`, `save_agent`, `run_agent`, `get_run` and
+`list_runs`.
+
+From a script: `POST /run/<agent>` with `Authorization: Bearer $RUN_TOKEN`
+queues a run; `GET /runs/<id>` returns it. Runs start within a minute.
 
 ## Spend cap
 
-Before each call watchd reserves the agent's budget and refuses the run if the
-UTC day would exceed `DAILY_CAP_USD`. After the call it records OpenRouter's
-reported cost; a failed run keeps its full reservation. Give watchd its own
-OpenRouter key with a credit limit as the outer backstop.
+Each run reserves its budget against `DAILY_CAP_USD` before it is queued, and the
+loop stops when the run's spend reaches its budget. Actual cost comes from
+OpenRouter per call; a failed run keeps its full reservation. Give watchd its own
+OpenRouter key with a credit limit as the outer backstop. Browser Run is billed by
+Cloudflare in browser hours (10 per month included on Workers Paid).
 
 ## Develop
 
@@ -42,7 +52,7 @@ OpenRouter key with a credit limit as the outer backstop.
 npm install
 npm test
 npm run db:migrate:local
-npm run dev          # http://localhost:8787, secrets in .dev.vars
+npm run dev          # secrets in .dev.vars; browse and links call Browser Run remotely
 curl "localhost:8787/cdn-cgi/local/scheduled?cron=*+*+*+*+*"
 ```
 
@@ -51,15 +61,9 @@ curl "localhost:8787/cdn-cgi/local/scheduled?cron=*+*+*+*+*"
 ```bash
 npx wrangler d1 create watchd       # put the id in wrangler.jsonc
 npm run db:migrate:remote
-npx wrangler secret put OPENROUTER_API_KEY
-npx wrangler secret put RUN_TOKEN    # openssl rand -hex 24
 npm run deploy
-```
-
-Sign in to the dashboard with `RUN_TOKEN`, or run an agent from a script:
-
-```bash
-curl -X POST -H "authorization: Bearer $RUN_TOKEN" https://watchd.<you>.workers.dev/run/edge-scout
+npx wrangler secret put OPENROUTER_API_KEY
+npx wrangler secret put RUN_TOKEN    # 24+ characters
 ```
 
 For email, set `NOTIFY_EMAIL` and `EMAIL_FROM` (an address on a domain with
