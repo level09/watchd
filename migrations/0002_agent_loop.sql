@@ -13,23 +13,6 @@ CREATE TABLE agents (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-INSERT INTO agents (name, prompt, schedule, budget, tools, max_steps, memory) VALUES (
-  'edge-scout',
-  'You watch releases for the stack behind example, example and example: Cloudflare Workers and D1, the Cloudflare agents SDK, Claude Code, Hono, example, example and Vue.
-
-Fetch these release feeds with fetch_page:
-- https://github.com/cloudflare/workers-sdk/releases.atom
-- https://github.com/cloudflare/agents/releases.atom
-- https://github.com/anthropics/claude-code/releases.atom
-- https://github.com/honojs/hono/releases.atom
-- https://github.com/example-team/example/releases.atom
-- https://github.com/example/example/releases.atom
-- https://github.com/vuejs/core/releases.atom
-
-Pass every release URL you consider to seen, and only report releases it returns as new. Pick at most five changes that would let the owner delete code, cut cost, close a security gap, or build something new. For each: a bold title, one line on what changed, one line on where it applies, and the release link. Skip routine bug fixes.',
-  '0 7 * * 1', 0.05, '["fetch_page","seen"]', 8, 1
-);
-
 -- Deterministic "only report what is new": the agent passes stable keys, watchd remembers them.
 CREATE TABLE seen (
   agent TEXT NOT NULL,

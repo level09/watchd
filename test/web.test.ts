@@ -18,11 +18,12 @@ async function signIn() {
 }
 
 it("shows only the login form to strangers and rejects wrong tokens", async () => {
+  await agent("private-one");
   const home = await (await req("/")).text();
   expect(home).toContain("Sign in");
-  expect(home).not.toContain("edge-scout");
+  expect(home).not.toContain("private-one");
   expect((await req("/login", { method: "POST", body: form({ token: "nope" }) })).status).toBe(401);
-  expect((await req("/run/edge-scout", { method: "POST" })).status).toBe(401);
+  expect((await req("/run/private-one", { method: "POST" })).status).toBe(401);
   expect((await req("/agents/new")).status).toBe(401);
   expect((await req("/mcp", { method: "POST", headers: { authorization: "Bearer nope" } })).status).toBe(401);
 });
@@ -93,7 +94,8 @@ it("renders escaped markdown and publishes only ok reports of public agents", as
   expect(res.headers.get("content-security-policy")).toContain("default-src 'none'");
   expect(html).toContain("<strong>Big</strong> &#60;script&#62;");
   expect(html).not.toMatch(/NOTHING|secret failure|\$/);
-  expect((await req("/p/edge-scout")).status).toBe(404);
+  await agent("not-public");
+  expect((await req("/p/not-public")).status).toBe(404);
 });
 
 it("refuses to serve anything with a weak RUN_TOKEN", async () => {
