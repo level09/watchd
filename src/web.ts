@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { esc, markdown } from "./markdown";
 import { runAgent } from "./run";
 import type { Agent, Env } from "./types";
 
@@ -11,9 +12,6 @@ const HTML_HEADERS = {
   "cache-control": "no-store",
 };
 
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-const linkify = (s: string) =>
-  esc(s).replace(/https?:\/\/[^\s<>"')\]]+/g, (u) => `<a href="${u}" rel="noreferrer">${u}</a>`);
 const usd = (n: number) => `$${n.toFixed(n < 0.1 ? 3 : 2)}`;
 const bytes = (s: string) => new TextEncoder().encode(s);
 const same = (a: string, b: string) => {
@@ -107,10 +105,10 @@ async function dashboard(env: Env, agents: Agent[]) {
     .join("");
   const runs = (recent.results as Run[])
     .map(
-      (r) => `<details>
+      (r, i) => `<details${i === 0 ? " open" : ""}>
         <summary><span class="s ${r.status}">${r.status}</span> <b>${esc(r.agent)}</b>
           <small>${esc(r.started_at)} UTC · ${usd(r.cost ?? r.reserved)}</small></summary>
-        <pre>${linkify(r.error ?? r.output ?? "")}</pre>
+        ${r.error ? `<pre>${esc(r.error)}</pre>` : `<div class="md">${markdown(r.output ?? "")}</div>`}
       </details>`,
     )
     .join("");
@@ -133,7 +131,7 @@ async function publicPage(env: Env, agent: Agent) {
     .bind(agent.name)
     .all<{ output: string; started_at: string }>();
   const reports = results
-    .map((r) => `<article><small>${esc(r.started_at)} UTC</small><pre>${linkify(r.output)}</pre></article>`)
+    .map((r) => `<article><small>${esc(r.started_at)} UTC</small><div class="md">${markdown(r.output)}</div></article>`)
     .join("");
   return page(agent.name, `<header><h1>${esc(agent.name)}</h1></header>${reports || "<p><small>No reports yet.</small></p>"}`);
 }
@@ -164,6 +162,10 @@ button{white-space:nowrap;font:inherit;padding:6px 12px;border-radius:6px;border
 button.ghost{background:none;color:var(--fg);border-color:var(--line)}form{margin:0}
 .login{max-width:320px;margin:15vh auto;display:grid;gap:12px}.login input{font:inherit;padding:8px 10px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg)}
 .err{color:var(--err);margin:0}
+.md{max-width:72ch;margin-top:10px;line-height:1.6}.md p{margin:0 0 12px}.md h3,.md h4,.md h5{margin:18px 0 8px;font-size:15px}
+.md p>strong:first-child{font-size:15.5px}.md ul,.md ol{margin:0 0 12px;padding-left:22px}.md li{margin:2px 0}
+.md code{font:12.5px ui-monospace,monospace;background:var(--line);padding:1px 5px;border-radius:4px}
+.md a{color:var(--mute);word-break:break-all}
 </style></head><body>${body}</body></html>`,
     { status, headers: HTML_HEADERS },
   );
