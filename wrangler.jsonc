@@ -10,7 +10,7 @@
     {
       "binding": "DB",
       "database_name": "watchd",
-      "database_id": "local-only-replace-on-deploy",
+      "database_id": "fa7b897b-0a22-4267-84b6-763fc4e8522f",
       "migrations_dir": "migrations",
     },
   ],
