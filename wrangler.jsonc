@@ -1,0 +1,25 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "watchd",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-22",
+  "compatibility_flags": ["nodejs_compat"],
+  // One tick per minute; agents carry their own cron schedules (UTC).
+  "triggers": { "crons": ["* * * * *"] },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "watchd",
+      "database_id": "local-only-replace-on-deploy",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "send_email": [{ "name": "EMAIL" }],
+  "vars": {
+    "DEFAULT_MODEL": "deepseek/deepseek-v4.1-flash",
+    "DAILY_CAP_USD": "1.00",
+    // Optional: set NOTIFY_EMAIL and EMAIL_FROM (an Email Sending domain) to get results by email.
+  },
+  "secrets": { "required": ["OPENROUTER_API_KEY", "RUN_TOKEN"] },
+  "observability": { "enabled": true },
+}

@@ -15,3 +15,8 @@ watchd
 
 # Isolated feature worktrees
 .worktrees/
+
+node_modules/
+.wrangler/
+.dev.vars
+.DS_Store

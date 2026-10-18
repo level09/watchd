@@ -1,408 +1,68 @@
 # watchd
 
-Fund the loops that prove they help.
+Small AI agents on a schedule, with a hard spend cap. One Cloudflare Worker, D1,
+and OpenRouter.
 
-Your goals and agents are markdown files. watchd decides which due agents deserve a finite daily budget, runs them with `claude -p`, records whether they helped, and shifts future spend toward verified value. Anything dangerous still waits for approval. One Go binary. Plain files.
+Each agent is a TypeScript file: a cron schedule, a budget, a prompt, and
+optional source URLs. When it is due, watchd fetches the sources, makes one model
+call, stores the result, and optionally emails it to you. A dashboard shows spend,
+runs, and a "Run now" button. Agents marked `public` get a shareable report page.
+
+## Add an agent
+
+```ts
+// agents/release-radar.ts
+import type { Agent } from "../src/types";
+
+export default {
+  name: "release-radar",
+  schedule: "0 7 * * 1", // cron, UTC
+  budget: 0.05, // USD reserved per run
+  memory: true, // keep notes between runs
+  public: false, // true publishes reports at /p/release-radar
+  sources: ["https://github.com/honojs/hono/releases.atom"],
+  prompt: "List releases worth acting on, with links.",
+} satisfies Agent;
+```
+
+Register it in `agents/index.ts` and deploy. A reply of exactly `NOTHING` stores
+the run without emailing. Append `:online` to a `model` slug for OpenRouter web
+search.
+
+## Spend cap
+
+Before each call watchd reserves the agent's budget and refuses the run if the
+UTC day would exceed `DAILY_CAP_USD`. After the call it records OpenRouter's
+reported cost; a failed run keeps its full reservation. Give watchd its own
+OpenRouter key with a credit limit as the outer backstop.
+
+## Develop
 
 ```bash
-curl -fsSL https://watchd.dev/install.sh | sh
+npm install
+npm test
+npm run db:migrate:local
+npm run dev          # http://localhost:8787, secrets in .dev.vars
+curl "localhost:8787/cdn-cgi/local/scheduled?cron=*+*+*+*+*"
 ```
 
-Or with Go 1.25+: `go install github.com/level09/watchd/cmd/watchd@latest`
-
-## The short version
-
-watchd runs small AI jobs on a schedule, remembers what happened, and spends
-your AI budget on the jobs that prove useful. You write plain Markdown; watchd
-handles the schedule, cost limit, memory, evidence, and approval gate.
-
-Think of it as four pieces:
-
-1. **Agent**: what to inspect or do (`agents/*.md`).
-2. **Goal**: why it matters (`goals/*.md`).
-3. **Policy**: how much money and review time is available (`watchd.yaml`).
-4. **Outcome**: whether the run helped: `useful`, `neutral`, or `harmful`.
-
-If you only want one job, use an agent by itself. If you have several jobs,
-add a portfolio so watchd can choose which due job deserves the next dollar.
-
-### Simplest useful setup
+## Deploy
 
 ```bash
-watchd init
-watchd run example       # try one agent now
-watchd logs              # inspect the result
-watchd up                # keep scheduled agents running
+npx wrangler d1 create watchd       # put the id in wrangler.jsonc
+npm run db:migrate:remote
+npx wrangler secret put OPENROUTER_API_KEY
+npx wrangler secret put RUN_TOKEN    # openssl rand -hex 24
+npm run deploy
 ```
 
-For a portfolio, create these two small files:
-
-`watchd.yaml`
-
-```yaml
-daily_budget: 1.00
-```
-
-`goals/product.md`
-
-```markdown
----
-name: product
-authority: propose
----
-Keep the product useful and releasable.
-```
-
-Then attach an agent to that goal:
-
-```markdown
----
-name: repo-health
-goal: product
-schedule: 6h
-budget: 0.20
----
-Find one important problem and explain the smallest safe fix.
-```
+Sign in to the dashboard with `RUN_TOKEN`, or run an agent from a script:
 
 ```bash
-watchd portfolio                  # see who is eligible
-watchd outcome <run-id> useful    # teach watchd what helped
-watchd pending                    # see plans waiting for you
-watchd approve <run-id>           # allow a proposed action
+curl -X POST -H "authorization: Bearer $RUN_TOKEN" https://watchd.<you>.workers.dev/run/edge-scout
 ```
 
-## Local dashboard
+For email, set `NOTIFY_EMAIL` and `EMAIL_FROM` (an address on a domain with
+Cloudflare Email Sending) in `wrangler.jsonc`.
 
-Run `watchd serve`, then open `http://127.0.0.1:7337`. The dashboard shows
-goals, agents, allocation decisions, review debt, spend, and recent outcomes.
-Use **New agent** to preview the exact Markdown and approve creation of one
-`agents/<name>.md` file. Use **Run now** to start a local run, inspect its result,
-and mark it useful, neutral, or harmful. It binds only to the local machine.
-Existing files and the run ledger remain the source of truth.
-
-## One night
-
-```
-23:08 » watchd up
-        5 agents armed. waiting for schedules.
-
-00:30 ✓ uptime      $0.008   all healthy, 200 OK in 142ms
-01:00 ✓ errors      $0.021   3 new timeouts in payment worker, same root cause
-02:00 ✓ security    $0.214   raw SQL in new search endpoint, flagged with patch
-04:15 ✓ competitor  $0.041   Acme cut Pro pricing 20%, second cut this quarter
-06:00 ✓ digest      $0.089   morning brief compiled, 1 plan pending your approval
-```
-
-You slept. They didn't. Total: $0.37.
-
-## Sixty seconds to your first agent
-
-```bash
-watchd init          # creates agents/example.md
-watchd run example
-```
-
-An agent is one file. Frontmatter is the config, the body is the prompt. Save this as `agents/uptime.md`:
-
-```markdown
----
-name: uptime
-schedule: 5m
-model: haiku
-budget: 0.10
----
-
-Check if https://api.myapp.com/health returns 200. If the response is
-slow or the body looks wrong, explain what might be happening.
-```
-
-```
-$ watchd run uptime
-✓ uptime in 4.2s ($0.0089)
-The endpoint returned HTTP 200 in 142ms. All healthy.
-
-$ watchd up          # start the scheduler
-```
-
-That is the legacy loop. Add a portfolio when several agents compete for money
-and review attention.
-
-## The portfolio: schedules become eligibility
-
-Cron assumes every recurring job remains equally valuable. watchd does not.
-In portfolio mode, a schedule says when an agent is eligible. A deterministic
-allocator decides what runs from goal importance, useful outcomes per dollar,
-remaining budget, uncertainty, and review debt.
-
-Create `watchd.yaml`:
-
-```yaml
-daily_budget: 1.00
-exploration: 0.15
-max_unrated: 5
-max_pending: 3
-```
-
-Create `goals/product.md`:
-
-```markdown
----
-name: product
-weight: 3
-daily_budget: 0.75
-authority: propose
----
-
-Keep the product releasable and reduce work users cannot review.
-```
-
-Attach agents to the goal and give each a reservable per-run budget:
-
-```markdown
----
-name: repo-health
-goal: product
-schedule: 6h
-model: sonnet
-budget: 0.25
-verify: go test ./...
-verify_timeout: 2m
----
-
-Find the smallest high-leverage repair when the verifier fails.
-```
-
-Run the portfolio:
-
-```text
-$ watchd portfolio
-portfolio  spent $0.1800  remaining $0.8200  pending 1/3  unrated 2/5
-
-AGENT                GOAL                  SCORE    RESERVE DECISION
-repo-health          product              18.420    $0.2500 highest verified return
-competitor           product               4.118    $0.1000 agent has unrated output
-
-$ watchd outcome competitor_... useful exposed a pricing move
-rated competitor_... useful
-```
-
-Useful results raise future allocation. Neutral and harmful results lower it.
-New agents retain bounded exploration so a successful incumbent does not own
-the budget forever. Identical state always produces the same decision.
-Agents without a schedule remain manual-only; they do not consume scheduled
-portfolio capacity.
-
-No model judges the portfolio. The formula and every admission reason are
-stored and inspectable.
-
-### Authority
-
-Goals set the maximum authority:
-
-- `observe`: read-only tools, completed observation
-- `propose`: read-only tools, pending human approval
-- `act`: configured tools; `gate: true` can still reduce it to `propose`
-
-Use `observe` or `propose` for health and finance. Approval rechecks configured
-evidence before acting, so a recovered goal supersedes a stale plan.
-
-### Evidence
-
-An optional `verify` command checks reality before and after action:
-
-- Already true: save `satisfied` and spend no model tokens.
-- False before and true after: record an automatic `useful` outcome.
-- False after execution: save `incomplete` and record `neutral`.
-- Timeout, command configuration, or process failure: save `error`.
-
-Verifier output is bounded to 8 KiB and treated as untrusted data. Inspect it
-without running an agent:
-
-```bash
-watchd check repo-health
-```
-
-Research and judgment work can be rated manually:
-
-```bash
-watchd outcome <run-id> useful "changed today's decision"
-watchd outcome <run-id> neutral
-watchd outcome <run-id> harmful "created unsafe advice"
-```
-
-Or triage everything unrated in one pass, one keypress per run:
-
-```text
-$ watchd rate
-
-[1/2] competitor  $0.0410  6h ago
-  Acme cut Pro pricing 20%. Second cut this quarter.
-  [u]seful [n]eutral [h]armful [s]kip [q]uit, note after value: u price war signal
-rated competitor_2026-07-11_041500 useful
-```
-
-The allocator holds an agent while it has unrated output, so rating throughput
-is the market's liquidity. `watchd rate` keeps it a thirty-second ritual.
-
-Ratings append to history rather than overwriting it. Your corrections remain
-auditable and become the portfolio's compounding asset.
-
-## Edge Scout: research that compounds
-
-This repository includes a manual `agents/edge-scout.md` agent. It uses the
-global Edge Scout skill to recover existing context, scout the live frontier,
-test whether an idea is durable, and produce a gated plan. With `memory: true`
-and `gate: true`, every run is costed, resumable, and held for review before
-implementation or external action:
-
-```bash
-watchd run edge-scout
-watchd pending
-watchd approve <run-id>
-```
-
-The skill supplies the judgment workflow; watchd supplies the persistent run
-ledger, curated memory, budget enforcement, and approval boundary.
-
-## Memory: loops that compound
-
-A scanner that re-reports the same findings is noise. Add one line of frontmatter and the agent gets a notes file it curates itself, injected at the start of every run and rewritten at the end:
-
-```markdown
----
-name: competitor
-schedule: 6h
-model: haiku
-memory: true
-budget: 0.10
----
-
-Check the pricing pages of Acme, Initech and Globex. Build on what you
-already know. Report only what changed and what it means.
-```
-
-Run 1 writes a baseline. Run 2 reports only the delta. Run 3 connects the dots:
-
-```
-$ cat memory/competitor.md
-
-## Baseline
-- Acme: Pro $49 -> $39 (-20%)
-- Initech: usage-based, no free tier
-- Globex: enterprise only, POC required
-
-## 2026-06-09
-- Acme launches annual billing
-
-## 2026-06-11
-- second Acme price cut this quarter
-- pattern: price war forming, watch for the Globex response
-```
-
-This is curated memory, not transcript stuffing. The model rewrites its own notes each run, so context stays sharp, stale entries get pruned, and a poisoned page scraped in run 12 never becomes standing instructions for run 13.
-
-## The gate: safe to point at real systems
-
-Some agents should not act on their own. With `gate: true` the run gets read-only tools and must end with a concrete plan. Nothing executes until you approve.
-
-```markdown
----
-name: dbcleanup
-schedule: 1d
-model: sonnet
-gate: true
-notify: "ntfy pub alerts 'watchd: $WATCHD_AGENT $WATCHD_STATUS'"
----
-
-Find bloated tables, unused indexes, and rows older than the retention
-policy. Propose a cleanup plan with exact commands and expected impact.
-```
-
-```
-$ watchd pending
-RUN                          AGENT      PROPOSED
-dbcleanup_2026-06-12_060003  dbcleanup  1. VACUUM ANALYZE on 4 bloated tables
-                                        2. Drop unused index idx_sessions_legacy
-                                        3. Archive 48,210 rows >180d from events
-
-$ watchd approve dbcleanup_2026-06-12_060003
-```
-
-Approving resumes the same session with the agent's real tools, so it executes exactly the plan you read. `watchd reject` discards it. The `notify` command fires for pending, error, incomplete, and harmful results, with `WATCHD_AGENT`, `WATCHD_RUN_ID`, `WATCHD_STATUS` and `WATCHD_RESULT` in the environment, so the result reaches your phone instead of waiting to be noticed.
-
-## Why not cron + bash
-
-Cron runs scripts. watchd runs judgment.
-
-A bash script checks if the endpoint returned 200. An agent notices the response was 200 but took four seconds, that the body is an error page wearing a success code, that the same timeout pattern showed up last Tuesday. You describe the intent in plain language; the model does the interpreting.
-
-On top of that, cron gives you none of the operational layer: no cost tracking, no run history once the terminal closes, no memory between runs, and your script executes with your full permissions from minute one. watchd tracks cost per run and enforces budgets mid-run, keeps every run as a queryable record, compounds findings through memory, and holds dangerous work behind the gate.
-
-## Commands
-
-| Command | What it does |
-|---------|--------------|
-| `watchd` | Status dashboard: last run, cost, schedule per agent |
-| `watchd init` | Create `agents/` with an example |
-| `watchd add <name>` | Scaffold a new agent |
-| `watchd edit <name>` | Open agent in `$EDITOR` |
-| `watchd run <name>` | Run an agent once |
-| `watchd serve [--addr ADDRESS]` | Start the local dashboard with run and outcome controls |
-| `watchd up` | Start the scheduler |
-| `watchd stop` | Stop the scheduler started in this directory |
-| `watchd logs [name]` | Run history |
-| `watchd costs` | Spend per agent |
-| `watchd portfolio` | Budget, review debt, scores, and admission reasons |
-| `watchd outcome <id> <value> [note]` | Record useful, neutral, or harmful value |
-| `watchd rate` | Triage unrated runs, one keypress each |
-| `watchd check <name>` | Run only an agent's verifier |
-| `watchd pending` | Gated runs awaiting approval |
-| `watchd approve <id>` | Execute a pending plan |
-| `watchd reject <id>` | Discard a pending plan |
-
-## Frontmatter
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `name` | filename | Agent identifier |
-| `schedule` | none | Interval: `30s`, `5m`, `2h`, `1d` (empty = manual only) |
-| `model` | `sonnet` | Claude model (`haiku` for cheap high-frequency loops) |
-| `budget` | none | Max cost per run in USD, enforced mid-run. A run has ~$0.05 of fixed CLI overhead, so keep budgets at `0.10` or above; web-research agents on sonnet need `0.30`+ |
-| `memory` | `false` | Curated memory file, injected and rewritten every run |
-| `gate` | `false` | Read-only dry run, execute only after approval |
-| `notify` | none | Shell command fired on pending, error, incomplete, or harmful |
-| `goal` | none | Goal identifier under `goals/`; enables portfolio allocation |
-| `verify` | none | Shell evidence command run before and after action |
-| `verify_timeout` | `2m` | Positive timeout for `verify` |
-| `max_turns` | none | Limit agentic turns |
-| `permission_mode` | `default` | Claude permission mode |
-| `tools` | minimal set | Restrict allowed tools |
-| `mcp_config` | none | Path to MCP config JSON (none loaded by default) |
-
-## Under the hood
-
-watchd is a small orchestration layer, about 2,600 lines of Go. No AI runtime,
-database, or API keys to manage. It spawns `claude -p`, parses JSON output, and
-records cost, evidence, allocation, outcomes, and instruction hashes.
-
-```
-cmd/watchd          entry point, one binary, no runtime deps
-internal/cli        all commands
-internal/app        dashboard snapshot builder
-internal/agent      markdown + YAML frontmatter parsing
-internal/portfolio  goals, policy, review limits, and deterministic allocation
-internal/runner     spawns claude -p, memory, gate, notify
-internal/store      run history as JSON files with provenance
-internal/daemon     scheduler loop
-internal/server     local dashboard HTTP server
-```
-
-Requires Go 1.25+ and an authenticated [Claude Code](https://claude.com/claude-code) CLI.
-
-Without `watchd.yaml`, existing agents keep the v1.0 run-every-schedule
-behavior. Existing run JSON remains readable.
-
-## License
-
-MIT
+The previous Go CLI is preserved at the `go-final` tag.
