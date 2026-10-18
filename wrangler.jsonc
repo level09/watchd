@@ -20,6 +20,6 @@
     "DAILY_CAP_USD": "1.00",
     // Optional: set NOTIFY_EMAIL and EMAIL_FROM (an Email Sending domain) to get results by email.
   },
-  "secrets": { "required": ["OPENROUTER_API_KEY", "RUN_TOKEN"] },
+  // Secrets: OPENROUTER_API_KEY and RUN_TOKEN, set with `wrangler secret put` (.dev.vars locally).
   "observability": { "enabled": true },
 }

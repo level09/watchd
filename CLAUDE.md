@@ -38,5 +38,5 @@ migrations/    - D1 schema (runs, memory)
 - `RUN_TOKEN` (24+ chars, required) gates everything private: bearer for scripts, a SameSite=Strict cookie holding a hash of the token for the dashboard
 - Public pages show only `ok` outputs, never costs or errors
 - Email is optional: no `NOTIFY_EMAIL` means no email
-- Wrangler only loads secrets listed in `secrets.required`, so any new secret must be declared there
+- No `secrets.required` block on purpose: it blocks the first deploy until secrets exist and makes local dev drop undeclared `.dev.vars` entries. The Worker fails closed instead (500 without a strong `RUN_TOKEN`, failed run without `OPENROUTER_API_KEY`)
 - Keep `compatibility_date` at or below what the installed workerd supports, or tests and `wrangler dev` fail to start
