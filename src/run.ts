@@ -40,7 +40,7 @@ export async function runAgent(env: Env, agent: Agent, slot: number): Promise<Ru
     const sources = await Promise.all((agent.sources ?? []).map(fetchSource));
     const reply = await complete(env, agent, buildPrompt(agent, day, notes, sources));
     cost = reply.cost;
-    const at = agent.memory ? reply.text.lastIndexOf(MARKER) : -1;
+    const at = agent.memory ? reply.text.indexOf(MARKER) : -1;
     const output = (at < 0 ? reply.text : reply.text.slice(0, at)).trim();
     const statements = [
       env.DB.prepare(
@@ -52,7 +52,7 @@ export async function runAgent(env: Env, agent: Agent, slot: number): Promise<Ru
       statements.push(
         env.DB.prepare(
           "INSERT INTO memory (agent, body) VALUES (?, ?) ON CONFLICT (agent) DO UPDATE SET body = excluded.body, updated_at = CURRENT_TIMESTAMP",
-        ).bind(agent.name, reply.text.slice(at + MARKER.length).trim()),
+        ).bind(agent.name, reply.text.slice(at + MARKER.length).replaceAll(MARKER, "").trim()),
       );
     await env.DB.batch(statements);
     if (output !== "NOTHING") await notify(env, `[watchd] ${agent.name} ${day}`, output);

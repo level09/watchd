@@ -83,3 +83,9 @@ it("keeps results in D1 without emailing when NOTIFY_EMAIL is unset", async () =
   expect(await row(slot)).toMatchObject({ status: "ok", output: "v3 is out." });
   expect(t.send).not.toHaveBeenCalled();
 });
+
+it("splits on the first marker when the model also closes the memory block", async () => {
+  const t = setup("Report.\n===MEMORY===\n- seen v4\n===MEMORY===");
+  expect(await runAgent(t.env, agent, Date.UTC(2026, 9, 7, 7))).toMatchObject({ output: "Report." });
+  expect(await memory()).toBe("- seen v4");
+});
