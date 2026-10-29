@@ -6,14 +6,25 @@ export type Message =
   | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string };
 
+// Rate limits and upstream blips usually clear in seconds, and a failed run is charged its whole reservation.
+const RETRY_MS = [1_000, 4_000];
+
 /** One chat completion. `cost` is undefined when OpenRouter does not report it. */
 export async function chat(env: Env, body: Record<string, unknown>) {
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
-    signal: AbortSignal.timeout(180_000),
-    body: JSON.stringify(body),
-  });
+  const post = () =>
+    fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
+      signal: AbortSignal.timeout(180_000),
+      body: JSON.stringify(body),
+    });
+  let res = await post();
+  for (const ms of RETRY_MS) {
+    if (res.ok || (res.status !== 429 && res.status < 500)) break;
+    await res.body?.cancel();
+    await scheduler.wait(ms);
+    res = await post();
+  }
   if (!res.ok) throw new Error(`openrouter_http_${res.status} ${(await res.text()).slice(0, 300)}`);
   const data = (await res.json()) as {
     choices?: { message?: { content?: string | null; tool_calls?: ToolCall[] } }[];

@@ -1,5 +1,15 @@
-import { expect, it } from "vitest";
-import { htmlToText } from "../src/tools";
+import { expect, it, vi } from "vitest";
+import { callTool, htmlToText } from "../src/tools";
+import { agent, setup } from "./helpers";
+
+it("stops reading a page body that never ends", async () => {
+  const t = setup([]);
+  const chunk = new TextEncoder().encode("<p>x</p>".repeat(8_000));
+  const endless = new ReadableStream({ pull: (c) => c.enqueue(chunk) });
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(endless, { headers: { "content-type": "text/html" } }));
+  const r = await callTool(t.env, await agent("big"), "fetch_page", JSON.stringify({ url: "https://big.test/" }));
+  expect(r.content).toMatch(/^HTTP 200\n\nx\nx/);
+});
 
 it("turns HTML into readable text with link targets", () => {
   expect(

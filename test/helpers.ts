@@ -12,6 +12,7 @@ export const final = (content: string, cost = 0.002) => ({ choices: [{ message: 
 /** Queue OpenRouter replies; every other URL serves a small HTML page. */
 export function setup(replies: (object | Response)[], over: Partial<Env> = {}) {
   vi.restoreAllMocks();
+  vi.spyOn(scheduler, "wait").mockResolvedValue(undefined);
   const send = vi.fn().mockResolvedValue({ messageId: "m" });
   const bodies: Record<string, unknown>[] = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {

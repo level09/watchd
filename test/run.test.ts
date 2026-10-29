@@ -58,10 +58,19 @@ it("forces a final answer at the step limit and reports disabled tools back to t
   expect(tool?.content).toBe("error: tool web_search is not enabled for this agent");
 });
 
+it("retries a transient provider error", async () => {
+  const a = await agent("blip", { tools: [] });
+  const t = setup([new Response("busy", { status: 429 }), final("Recovered.")]);
+  const q = await enqueue(t.env, a, Date.UTC(2026, 9, 5, 6));
+  if (q.status !== "queued") throw new Error("not queued");
+  await execute(t.env, q.id);
+  expect(await run(q.id)).toMatchObject({ status: "ok", output: "Recovered." });
+});
+
 it("charges the reservation on provider failure and keeps old memory", async () => {
   const a = await agent("flaky");
   await env.DB.prepare("INSERT OR REPLACE INTO memory (agent, body) VALUES ('flaky', 'keep me')").run();
-  const t = setup([new Response("upstream down", { status: 502 })]);
+  const t = setup([1, 2, 3].map(() => new Response("upstream down", { status: 502 })));
   const q = await enqueue(t.env, a, Date.UTC(2026, 9, 5, 7));
   if (q.status !== "queued") throw new Error("not queued");
   await execute(t.env, q.id);

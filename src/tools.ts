@@ -58,7 +58,7 @@ async function run(env: Env, agent: Agent, name: ToolName, args: Record<string, 
         headers: { "user-agent": "Mozilla/5.0 (compatible; watchd)", accept: "text/html,application/xml;q=0.9,*/*;q=0.8" },
         signal: AbortSignal.timeout(15_000),
       });
-      const body = await res.text();
+      const body = await head(res);
       const type = res.headers.get("content-type") ?? "";
       // Feeds carry escaped HTML inside XML, so they need a second pass.
       const text = /html/.test(type) ? htmlToText(body) : /xml/.test(type) ? htmlToText(htmlToText(body)) : body;
@@ -89,6 +89,20 @@ async function run(env: Env, agent: Agent, name: ToolName, args: Record<string, 
       return { content: JSON.stringify({ new: fresh, already_seen: keys.filter((k) => !fresh.includes(k)) }), cost: 0 };
     }
   }
+}
+
+// A link to a huge file must not exhaust the Worker's 128 MB; real pages fit well under this.
+const BODY_BYTES = 5_000_000;
+
+async function head(res: Response) {
+  const decoder = new TextDecoder();
+  let text = "";
+  let size = 0;
+  for await (const chunk of res.body ?? []) {
+    text += decoder.decode(chunk, { stream: true });
+    if ((size += chunk.byteLength) >= BODY_BYTES) break;
+  }
+  return text;
 }
 
 async function browser(res: Response) {
