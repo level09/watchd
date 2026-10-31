@@ -301,10 +301,13 @@ label.opt{display:flex;gap:10px;align-items:flex-start;font-weight:400}label.opt
 .danger{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:32px;padding-top:16px;border-top:1px solid var(--line);max-width:720px}.danger form{display:flex;gap:10px;align-items:center}
 .login{max-width:320px;margin:15vh auto;display:grid;gap:12px}
 .err{color:var(--err);margin:0}
-.md{max-width:72ch;margin-top:10px;line-height:1.6}.md p{margin:0 0 12px}.md h3,.md h4,.md h5{margin:18px 0 8px;font-size:15px}
-.md p>strong:first-child{font-size:15.5px}.md ul,.md ol{margin:0 0 12px;padding-left:22px}.md li{margin:2px 0}
+.md{max-width:72ch;margin-top:10px;line-height:1.6}.md p{margin:0 0 12px}
+.md h3,.md h4,.md h5{margin:28px 0 10px;line-height:1.3}.md h3{font-size:19px}.md h4{font-size:16.5px;padding-bottom:6px;border-bottom:1px solid var(--line)}.md h5{font-size:15px}
+.md>:first-child{margin-top:4px}
+.md p>strong:first-child{font-size:15.5px}.md ul,.md ol{margin:0 0 12px;padding-left:22px}.md li{margin:0 0 14px}.md li::marker{color:var(--mute)}
+.md strong a{color:var(--fg);font-weight:600}.md em{font-style:normal;color:var(--mute);font-size:13.5px}
 .md code{font:12.5px ui-monospace,monospace;background:var(--line);padding:1px 5px;border-radius:4px}
-.md a{color:var(--mute);word-break:break-all}
+.md a{color:inherit;text-decoration-color:var(--line);text-underline-offset:3px;overflow-wrap:anywhere}.md a:hover{text-decoration-color:currentColor}
 </style></head><body>${body}</body></html>`,
     { status, headers: HTML_HEADERS },
   );

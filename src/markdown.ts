@@ -5,6 +5,7 @@ const inline = (s: string) =>
   esc(s)
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*\s][^*]*)\*/g, "<em>$1</em>")
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" rel="noreferrer">$1</a>')
     .replace(/(^|[\s(])(https?:\/\/[^\s<>"')\]]+)/g, '$1<a href="$2" rel="noreferrer">$2</a>');
 
@@ -32,6 +33,9 @@ export function markdown(src: string): string {
       endList();
       const level = heading[1].length + 2;
       out.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+    } else if (list && !item && /^\s/.test(line)) {
+      // an indented line under a list item continues it: a second line for detail, not a new paragraph
+      out.push(`${out.pop()!.slice(0, -5)}<br>${inline(text)}</li>`);
     } else if (item) {
       endPara();
       const kind = item[1] ? "ul" : "ol";

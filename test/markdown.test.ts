@@ -13,3 +13,9 @@ it("never passes model HTML through", () => {
   const html = markdown('<script>alert(1)</script> [x](javascript:alert(1)) <img src=x onerror="y">');
   expect(html).not.toMatch(/<script|<img|href="javascript/);
 });
+
+it("continues a list item on indented lines and renders emphasis", () => {
+  expect(markdown("1. **Title** *9 pts*\n   Why it matters.\n2. Next")).toBe(
+    "<ol><li><strong>Title</strong> <em>9 pts</em><br>Why it matters.</li><li>Next</li></ol>",
+  );
+});
