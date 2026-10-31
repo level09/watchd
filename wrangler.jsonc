@@ -4,6 +4,9 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-22",
   "compatibility_flags": ["nodejs_compat"],
+  // Explicit so a deploy always serves the dashboard at the workers.dev URL; preview URLs off so old versions are not reachable.
+  "workers_dev": true,
+  "preview_urls": false,
   // One tick per minute; agents carry their own cron schedules (UTC).
   "triggers": { "crons": ["* * * * *"] },
   "d1_databases": [
