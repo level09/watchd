@@ -23,5 +23,6 @@
     // Optional: set NOTIFY_EMAIL and EMAIL_FROM (an Email Sending domain) to get results by email.
   },
   // Secrets: OPENROUTER_API_KEY and RUN_TOKEN, set with `wrangler secret put` (.dev.vars locally).
-  "observability": { "enabled": true },
+  // The every-minute tick would write 1,440 invocation logs a day; keep only what the code logs (skips and failures).
+  "observability": { "enabled": true, "logs": { "invocation_logs": false } },
 }
