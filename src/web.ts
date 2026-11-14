@@ -9,7 +9,7 @@ import type { Env } from "./types";
 const HTML_HEADERS = {
   "content-type": "text/html; charset=utf-8",
   "content-security-policy":
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    "default-src 'none'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
   "x-content-type-options": "nosniff",
   "referrer-policy": "no-referrer",
   "cache-control": "no-store",
@@ -159,11 +159,11 @@ async function dashboard(env: Env, notice: string | null) {
     .map((a) => {
       const r = last.get(a.name);
       return `<tr>
-        <td><a href="/agents/${a.name}"><b>${a.name}</b></a>${a.public ? ` <a class="tag" href="/p/${a.name}">public</a>` : ""}</td>
+        <th><a href="/agents/${a.name}">${a.name}</a>${a.public ? ` <a class="tag" href="/p/${a.name}">public</a>` : ""}</th>
         <td>${a.schedule ? `<code>${esc(a.schedule)}</code>` : "<small>manual</small>"}</td>
-        <td>${usd(a.budget)}</td>
+        <td class="n">${usd(a.budget)}</td>
         <td>${r ? `<span class="s ${r.status}">${r.status}</span> <small>${esc(r.started_at)}</small>` : "<small>never</small>"}</td>
-        <td><form method="post" action="/run/${a.name}"><button>Run now</button></form></td>
+        <td class="act"><form method="post" action="/run/${a.name}"><button class="ghost">Run now</button></form></td>
       </tr>`;
     })
     .join("");
@@ -183,28 +183,38 @@ async function dashboard(env: Env, notice: string | null) {
         : r.output
           ? `<div class="md">${markdown(r.output)}</div>`
           : "<p><small>Working…</small></p>";
-      return `<details${i === 0 ? " open" : ""}>
+      return `<details class="card"${i === 0 ? " open" : ""}>
         <summary><span class="s ${r.status}">${r.status}</span> <b>${esc(r.agent)}</b>
           <small>${esc(r.started_at)} UTC · ${usd(r.cost ?? r.reserved)}${s.length ? ` · ${s.length} steps` : ""}</small></summary>
-        ${body}${steps ? `<details class="sub"><summary><small>Trace</small></summary>${steps}</details>` : ""}
+        ${body}${steps ? `<details class="sub"><summary>Trace</summary>${steps}</details>` : ""}
       </details>`;
     })
     .join("");
   const usdSpent = Number((spent.results[0] as { usd: number }).usd);
+  const cap = Number(env.DAILY_CAP_USD);
+  const active = runs.filter((r) => r.status === "queued" || r.status === "running").length;
   return page(
     "watchd",
-    `<header><h1>watchd</h1>
-      <span>${usd(usdSpent)} of ${usd(Number(env.DAILY_CAP_USD))} today</span>
-      <a class="button" href="/agents/new">New agent</a>
-      <form method="post" action="/logout"><button class="ghost">Sign out</button></form></header>
-    ${banner}
-    <table><thead><tr><th>Agent</th><th>Schedule (UTC)</th><th>Budget</th><th>Last run</th><th></th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="5"><small>No agents yet.</small></td></tr>`}</tbody></table>
-    <h2>Recent runs</h2>${items || "<p><small>No runs yet.</small></p>"}`,
+    `${bar("", `<a class="button" href="/agents/new">New agent</a>
+      <form method="post" action="/logout"><button class="ghost">Sign out</button></form>`)}
+    <main class="wrap">${banner}
+    <div class="tiles">
+      <div class="tile"><span class="k">Spent today</span><b>${usd(usdSpent)}</b>
+        <div class="meter"><i style="width:${Math.min(100, (usdSpent / cap) * 100).toFixed(1)}%"></i></div><p>of ${usd(cap)} daily cap</p></div>
+      <div class="tile"><span class="k">Agents</span><b>${agents.length}</b><p>${agents.filter((a) => a.schedule).length} scheduled</p></div>
+      <div class="tile"><span class="k">Active runs</span><b>${active}</b><p>${active ? "refreshing every 10s" : "nothing in flight"}</p></div>
+    </div>
+    <section><h2>Agents</h2>
+    <div class="panel tbl"><table><thead><tr><th>Agent</th><th>Schedule (UTC)</th><th>Budget</th><th>Last run</th><th></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="5"><small>No agents yet.</small></td></tr>`}</tbody></table></div></section>
+    <section><h2>Recent runs</h2>${items || "<p><small>No runs yet.</small></p>"}</section></main>`,
     200,
     busy ? '<meta http-equiv="refresh" content="10">' : "",
   );
 }
+
+const bar = (crumb: string, actions = "") =>
+  `<header class="bar"><div class="wrap"><b><a href="/">watchd</a>${crumb ? ` <span>/ ${crumb}</span>` : ""}</b><nav>${actions}</nav></div></header>`;
 
 const BLANK: Agent = {
   name: "",
@@ -228,9 +238,10 @@ function agentPage(env: Env, existing: Agent | null, error = "", draft?: Agent) 
   ).join("");
   return page(
     existing ? existing.name : "New agent",
-    `<header><h1><a href="/">watchd</a> / ${existing ? esc(existing.name) : "new agent"}</h1></header>
+    `${bar(existing ? esc(existing.name) : "new agent")}<main class="wrap narrow">
+    <h1>${existing ? esc(existing.name) : "New agent"}</h1>
     ${error ? `<p class="notice err">${esc(error)}</p>` : ""}
-    <form class="agent" method="post" action="/agents">
+    <form class="agent panel" method="post" action="/agents">
       <input type="hidden" name="mode" value="${existing ? "update" : "create"}">
       <label>Name<input name="name" value="${v(a.name)}" ${existing ? "readonly" : "required autofocus"} pattern="[a-z0-9][a-z0-9\\-]{0,39}" placeholder="job-radar"></label>
       <label>Instructions<textarea name="prompt" rows="12" required placeholder="What to check, where, and what to report.">${v(a.prompt)}</textarea></label>
@@ -243,14 +254,14 @@ function agentPage(env: Env, existing: Agent | null, error = "", draft?: Agent) 
       <fieldset><legend>Tools</legend>${tools}</fieldset>
       <label class="opt"><input type="checkbox" name="memory"${check(a.memory)}><span><b>Memory</b> <small>keep notes between runs</small></span></label>
       <label class="opt"><input type="checkbox" name="public"${check(a.public)}><span><b>Public</b> <small>publish reports at /p/${v(a.name) || "name"}</small></span></label>
-      <button>Save</button>
+      <div><button>Save</button></div>
     </form>
     ${
       existing
         ? `<div class="danger"><form method="post" action="/run/${existing.name}"><button class="ghost">Run now</button></form>
-      <form method="post" action="/agents/${existing.name}/delete"><label class="opt"><input type="checkbox" required><span><small>I want to delete this agent</small></span></label><button class="ghost">Delete</button></form></div>`
+      <form method="post" action="/agents/${existing.name}/delete"><label class="opt"><input type="checkbox" required><span><small>I want to delete this agent</small></span></label><button class="ghost bad">Delete</button></form></div>`
         : ""
-    }`,
+    }</main>`,
   );
 }
 
@@ -261,12 +272,15 @@ async function publicPage(env: Env, agent: Agent) {
     .bind(agent.name)
     .all<{ output: string; started_at: string }>();
   const reports = results
-    .map((r) => `<article><small>${esc(r.started_at)} UTC</small><div class="md">${markdown(r.output)}</div></article>`)
+    .map((r) => `<article class="card"><span class="k">${esc(r.started_at)} UTC</span><div class="md">${markdown(r.output)}</div></article>`)
     .join("");
-  return page(agent.name, `<header><h1>${esc(agent.name)}</h1></header>${reports || "<p><small>No reports yet.</small></p>"}`);
+  return page(
+    agent.name,
+    `<main class="wrap narrow"><h1>${esc(agent.name)}</h1>${reports || "<p><small>No reports yet.</small></p>"}</main>`,
+  );
 }
 
-const loginForm = (error = "") => `<form class="login" method="post" action="/login">
+const loginForm = (error = "") => `<form class="login panel" method="post" action="/login">
   <h1>watchd</h1>${error ? `<p class="err">${error}</p>` : ""}
   <input type="password" name="token" placeholder="RUN_TOKEN" autocomplete="current-password" required autofocus>
   <button>Sign in</button></form>`;
@@ -275,39 +289,64 @@ const page = (title: string, body: string, status = 200, head = "") =>
   new Response(
     `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">${head}
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
 <title>${esc(title)}</title><style>
-:root{--bg:#fafaf9;--fg:#1c1917;--mute:#78716c;--line:#e7e5e4;--card:#fff;--ok:#15803d;--err:#b91c1c;--run:#a16207}
-@media (prefers-color-scheme:dark){:root{--bg:#0c0a09;--fg:#e7e5e4;--mute:#a8a29e;--line:#292524;--card:#1c1917;--ok:#4ade80;--err:#f87171;--run:#facc15}}
-*{box-sizing:border-box}body{margin:0 auto;max-width:960px;padding:24px 16px;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,sans-serif}
-header{display:flex;align-items:center;flex-wrap:wrap;gap:12px 16px;margin-bottom:24px}header h1{margin:0;font-size:22px;flex:1}header h1 a{text-decoration:none}header span{color:var(--mute)}
-h2{font-size:16px;margin:32px 0 8px}small{color:var(--mute)}a{color:inherit}
-table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden}
-th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line)}td b{white-space:nowrap}th{font-size:12px;color:var(--mute);font-weight:500}
-@media (max-width:640px){th:nth-child(2),td:nth-child(2),th:nth-child(3),td:nth-child(3){display:none}}
-details,article{background:var(--card);border:1px solid var(--line);border-radius:8px;margin-bottom:8px;padding:10px 12px}
-details.sub{border:0;padding:0;margin:8px 0 0;background:none}.trace{margin:6px 0 0;padding-left:22px;font-size:13px}.trace li{margin:2px 0;word-break:break-all}
-summary{cursor:pointer}pre{white-space:pre-wrap;word-break:break-word;font:13px/1.55 ui-monospace,monospace;margin:10px 0 0}
-.s{font-size:12px;font-weight:600}.ok{color:var(--ok)}.error{color:var(--err)}.running,.queued{color:var(--run)}
-.tag{font-size:11px;border:1px solid var(--line);border-radius:4px;padding:1px 5px;text-decoration:none;color:var(--mute)}
-button,.button{white-space:nowrap;font:inherit;padding:6px 12px;border-radius:6px;border:1px solid var(--fg);background:var(--fg);color:var(--bg);cursor:pointer;text-decoration:none}
-button.ghost{background:none;color:var(--fg);border-color:var(--line)}form{margin:0}
-.notice{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:0 0 16px}
-input,textarea{font:inherit;padding:8px 10px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--fg);width:100%}
-textarea{font:13.5px/1.55 ui-monospace,monospace;resize:vertical}
-.agent{display:grid;gap:14px;max-width:720px}.agent label{display:grid;gap:4px;font-weight:500}.row{display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px;align-items:end}
-@media (max-width:640px){.row{grid-template-columns:1fr}}
-fieldset{border:1px solid var(--line);border-radius:8px;padding:8px 12px;display:grid;gap:6px}legend{font-weight:500;padding:0 4px}
-label.opt{display:flex;gap:10px;align-items:flex-start;font-weight:400}label.opt input{width:auto;margin-top:4px}
-.danger{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:32px;padding-top:16px;border-top:1px solid var(--line);max-width:720px}.danger form{display:flex;gap:10px;align-items:center}
-.login{max-width:320px;margin:15vh auto;display:grid;gap:12px}
-.err{color:var(--err);margin:0}
-.md{max-width:72ch;margin-top:10px;line-height:1.6}.md p{margin:0 0 12px}
-.md h3,.md h4,.md h5{margin:28px 0 10px;line-height:1.3}.md h3{font-size:19px}.md h4{font-size:16.5px;padding-bottom:6px;border-bottom:1px solid var(--line)}.md h5{font-size:15px}
-.md>:first-child{margin-top:4px}
-.md p>strong:first-child{font-size:15.5px}.md ul,.md ol{margin:0 0 12px;padding-left:22px}.md li{margin:0 0 14px}.md li::marker{color:var(--mute)}
-.md strong a{color:var(--fg);font-weight:600}.md em{font-style:normal;color:var(--mute);font-size:13.5px}
-.md code{font:12.5px ui-monospace,monospace;background:var(--line);padding:1px 5px;border-radius:4px}
-.md a{color:inherit;text-decoration-color:var(--line);text-underline-offset:3px;overflow-wrap:anywhere}.md a:hover{text-decoration-color:currentColor}
+:root{--paper:#f4f0e8;--card:#f7f4ee;--rail:#efe9de;--ink:#2b2e45;--ink-2:#555a70;--ink-3:#6b6f82;--line:#c9c4b8;--yellow:#f2cb72;--mint:#a9d6c0;--coral:#e8704a;--coral-ink:#a84a28;
+--sans:"Figtree",system-ui,sans-serif;--mono:"JetBrains Mono",ui-monospace,monospace;color-scheme:light}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:400 1rem/1.55 var(--sans)}
+::selection{background:var(--yellow)}:focus-visible{outline:3px solid var(--coral);outline-offset:2px}
+a{color:inherit}small{color:var(--ink-3)}form{margin:0}p{margin:0}
+.wrap{max-width:1100px;margin:0 auto;padding:0 24px}.wrap.narrow{max-width:820px}main{padding-bottom:72px}
+h1{font:800 clamp(1.8rem,3.6vw,2.6rem)/1.08 var(--sans);letter-spacing:-.025em;margin:40px 0 24px}
+h2{font:800 clamp(1.4rem,2.4vw,1.8rem)/1.1 var(--sans);letter-spacing:-.02em;margin:0 0 16px}section{padding-top:48px}
+.k{font:400 .72rem var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+code{font:.86em var(--mono);background:#ebe5d8;padding:.05em .35em;border-radius:4px;overflow-wrap:anywhere}
+.bar{position:sticky;top:0;z-index:10;background:rgb(244 240 232/.92);backdrop-filter:blur(8px);border-bottom:1.5px solid var(--line)}
+.bar .wrap{display:flex;align-items:center;gap:16px;height:60px}.bar b{font:800 1.05rem var(--sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.bar b a{text-decoration:none}.bar b span{font-weight:400;color:var(--ink-2)}.bar nav{display:flex;gap:8px;margin-left:auto;align-items:center}
+.panel,.card,.tile{border:2px solid var(--ink);border-radius:16px;background:var(--card);box-shadow:5px 5px 0 var(--ink)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:18px;margin-top:36px}.tile{padding:18px 20px}
+.tile b{display:block;font:800 clamp(1.7rem,3vw,2.2rem)/1.15 var(--sans);letter-spacing:-.02em;margin-top:6px;font-variant-numeric:tabular-nums}
+.tile p{margin-top:6px;color:var(--ink-2);font-size:.92rem}
+.meter{height:10px;margin-top:10px;border:1.5px solid var(--ink);border-radius:999px;background:var(--paper);overflow:hidden}.meter i{display:block;height:100%;background:var(--yellow);border-right:1.5px solid var(--ink)}
+.tbl{overflow-x:auto;padding:4px 20px 8px}.tbl table{width:100%;border-collapse:collapse}
+.tbl th,.tbl td{text-align:left;vertical-align:middle;padding:12px 16px 12px 0;border-top:1.5px solid var(--line)}
+.tbl thead th{border-top:0;border-bottom:2px solid var(--ink);font:400 .72rem var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);white-space:nowrap}
+.tbl tbody tr:first-child>*{border-top:0}.tbl tbody th{font-weight:700;white-space:nowrap}.tbl tbody th a{text-decoration:none}.tbl tbody th a:hover{text-decoration:underline}
+.tbl td{color:var(--ink-2)}.tbl td.n{font:400 .9rem var(--mono);color:var(--ink)}.tbl td.act{text-align:right;padding-right:0}
+@media (max-width:640px){.tbl th:nth-child(2),.tbl td:nth-child(2),.tbl th:nth-child(3),.tbl td:nth-child(3){display:none}}
+.s{display:inline-block;font:700 .68rem/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;padding:5px 8px;border:1.5px solid var(--ink);border-radius:999px;background:var(--card);vertical-align:2px}
+.s.ok{background:var(--mint)}.s.error{background:var(--coral);color:var(--card)}.s.running,.s.queued{background:var(--yellow)}
+.tag{font:400 .68rem var(--mono);letter-spacing:.08em;text-transform:uppercase;border:1.5px solid var(--line);border-radius:6px;padding:1px 6px;margin-left:6px;text-decoration:none;color:var(--ink-2)}
+details.card,article.card{padding:14px 20px;margin-bottom:16px}article.card{padding:18px 22px 6px;margin-bottom:22px}
+details.card>summary{cursor:pointer;display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;list-style:none;font-size:1.05rem}
+details.card>summary::-webkit-details-marker{display:none}details.card>summary small{font:400 .8rem var(--mono);margin-left:auto}
+details.card[open]>summary{padding-bottom:12px;border-bottom:1.5px solid var(--line)}
+details.sub{margin:16px 0 6px}details.sub>summary{cursor:pointer;font:400 .78rem var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2)}
+.trace{margin:10px 0 0;padding:10px 14px 10px 34px;border:1.5px solid var(--line);border-radius:10px;background:var(--rail);font:400 .8rem/1.6 var(--mono)}
+.trace li{margin:3px 0;overflow-wrap:anywhere}.trace li::marker{color:var(--ink-3)}
+pre{white-space:pre-wrap;word-break:break-word;font:.85rem/1.6 var(--mono);margin:14px 0 4px;padding:12px 14px;border-left:4px solid var(--coral);background:#fbeee6;border-radius:6px;color:var(--coral-ink)}
+button,.button{display:inline-flex;align-items:center;white-space:nowrap;font:700 .85rem var(--mono);padding:7px 14px;border-radius:999px;border:2px solid var(--ink);background:var(--ink);color:var(--card);cursor:pointer;text-decoration:none}
+button.ghost{background:var(--card);color:var(--ink)}button:hover,.button:hover{box-shadow:2px 2px 0 var(--ink);transform:translate(-1px,-1px)}
+button.bad{border-color:var(--coral);color:var(--coral-ink)}button.bad:hover{box-shadow:2px 2px 0 var(--coral)}
+.notice{margin:28px 0 0;padding:12px 16px;border:2px solid var(--ink);border-radius:12px;background:#fff1cc}.notice.err,.err{color:var(--coral-ink)}.notice.err{background:#fbeee6;border-color:var(--coral)}
+input,textarea{font:inherit;padding:9px 12px;border-radius:10px;border:1.5px solid var(--line);background:var(--paper);color:var(--ink);width:100%}
+input:focus,textarea:focus{border-color:var(--ink);outline:none;box-shadow:3px 3px 0 var(--ink)}input[readonly]{color:var(--ink-3)}
+textarea{font:.85rem/1.6 var(--mono);resize:vertical}
+.agent{display:grid;gap:18px;padding:24px 26px}.agent label{display:block;font-weight:600}.agent label>input,.agent label>textarea{display:block;margin-top:6px}.agent small{font-weight:400;margin-left:4px}
+.row{display:grid;grid-template-columns:2fr 1fr 1fr;gap:14px;align-items:end}@media (max-width:640px){.row{grid-template-columns:1fr}}
+fieldset{border:1.5px solid var(--line);border-radius:12px;padding:10px 16px 14px;display:grid;gap:8px;margin:0}legend{font:400 .72rem var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);padding:0 6px}
+label.opt{display:flex;gap:12px;align-items:flex-start;font-weight:400}label.opt input{width:20px;height:20px;flex:none;margin:2px 0 0;accent-color:var(--ink)}label.opt small{display:block;margin:0;color:var(--ink-2)}
+.danger{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:32px;padding-top:20px;border-top:1.5px solid var(--line)}.danger form{display:flex;gap:12px;align-items:center}
+.login{max-width:360px;margin:18vh auto 0;display:grid;gap:14px;padding:26px}.login h1{margin:0 0 4px}
+.md{max-width:72ch;margin-top:14px;line-height:1.6;font-size:1.02rem}.md p{margin:0 0 14px}
+.md h3,.md h4,.md h5{font-family:var(--sans);margin:28px 0 10px;line-height:1.3;letter-spacing:-.01em}.md h3{font-size:1.3rem;font-weight:800}.md h4{font-size:1.1rem;padding-bottom:6px;border-bottom:1.5px solid var(--line)}.md h5{font-size:1rem}
+.md>:first-child{margin-top:4px}.md ul,.md ol{margin:0 0 14px;padding-left:22px}.md li{margin:0 0 12px}.md li::marker{color:var(--ink-3)}
+.md strong a{font-weight:700}.md em{font-style:normal;color:var(--ink-3);font-size:.9em}
+.md a{text-decoration:underline dotted var(--coral) 2px;text-underline-offset:4px;overflow-wrap:anywhere}.md a:hover{text-decoration-style:solid}
+@media (max-width:640px){.wrap{padding:0 16px}details.card>summary small{margin-left:0;width:100%}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style></head><body>${body}</body></html>`,
     { status, headers: HTML_HEADERS },
   );
