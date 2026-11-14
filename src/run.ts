@@ -89,6 +89,8 @@ export async function execute(env: Env, id: number) {
     ];
     const tools = toolDefs(agent);
     let text = "";
+    const fresh = new Set<string>();
+    const stale = new Set<string>();
     for (let n = 1; ; n++) {
       const last = n >= agent.max_steps;
       if (last && tools.length)
@@ -116,12 +118,21 @@ export async function execute(env: Env, id: number) {
       const results = await Promise.all(calls.map((c) => callTool(env, agent, c.function.name, c.function.arguments)));
       spent += results.reduce((sum, r) => sum + r.cost, 0);
       await env.DB.batch(results.map((r, i) => step(calls[i].function.name, calls[i].function.arguments, r.content, r.cost)));
+      for (const [i, r] of results.entries())
+        if (calls[i].function.name === "seen" && r.content.startsWith("{")) {
+          const verdict = JSON.parse(r.content) as { new: string[]; already_seen: string[] };
+          for (const k of verdict.new) fresh.add(k);
+          for (const k of verdict.already_seen) stale.add(k);
+        }
       messages.push(...results.map((r, i) => ({ role: "tool" as const, tool_call_id: calls[i].id, content: r.content })));
     }
     if (!text) throw new Error("no_final_answer");
 
     const at = agent.memory ? text.indexOf(MARKER) : -1;
-    const output = (at < 0 ? text : text.slice(0, at)).trim();
+    // A key marked new earlier in this run comes back already_seen on a repeat call; it is still new.
+    const { kept, dropped } = dropSeen((at < 0 ? text : text.slice(0, at)).trim(), [...stale].filter((k) => !fresh.has(k)));
+    const output = kept;
+    if (dropped.length) await step("dedup", dropped.join("\n"), `dropped ${dropped.length} already seen item(s)`, 0).run();
     const writes = [
       env.DB.prepare("UPDATE runs SET status = 'ok', cost = ?, output = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?").bind(
         spent,
@@ -153,6 +164,22 @@ export async function execute(env: Env, id: number) {
       console.error("notify_failed", run.agent, String(err)),
     );
   }
+}
+
+const ITEM = /^\s*(?:[-*]|\d+[.)])\s/;
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Removes report list items that mention a key seen flagged as already seen; the model does not always obey it. */
+export function dropSeen(report: string, keys: string[]) {
+  if (!keys.length) return { kept: report, dropped: [] as string[] };
+  const hit = new RegExp(`(?<![\\w/.-])(?:${keys.map(escapeRe).join("|")})(?![\\w/-])`);
+  const blocks: string[][] = [];
+  // An item owns the indented lines under it, the same continuation rule the markdown renderer uses.
+  for (const line of report.split("\n"))
+    if (blocks.length && ITEM.test(blocks.at(-1)![0]) && /^\s+\S/.test(line)) blocks.at(-1)!.push(line);
+    else blocks.push([line]);
+  const dropped = blocks.filter((b) => ITEM.test(b[0]) && hit.test(b.join("\n")));
+  return { kept: blocks.filter((b) => !dropped.includes(b)).flat().join("\n"), dropped: dropped.map((b) => b[0].trim()) };
 }
 
 function buildPrompt(agent: Agent, day: string, notes: string | undefined): string {

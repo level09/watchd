@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { expect, it } from "vitest";
-import { enqueue, execute, tick } from "../src/run";
+import { dropSeen, enqueue, execute, tick } from "../src/run";
 import { agent, call, final, run, setup, steps } from "./helpers";
 
 
@@ -113,4 +113,26 @@ it("tick enqueues due agents, runs the queue and retires stuck runs", async () =
     { agent: "daily", status: "error", error: "timed_out", cost: 0.05 },
     { agent: "daily", status: "ok", error: null, cost: 0.002 },
   ]);
+});
+
+it("drops report items the model kept although seen flagged them as already seen", async () => {
+  const a = await agent("digest");
+  await env.DB.prepare("INSERT INTO seen (agent, key) VALUES ('digest', '42')").run();
+  const t = setup([
+    call("seen", { keys: ["42", "7"] }, "c1"),
+    call("seen", { keys: ["7"] }, "c2"), // a repeat call flags 7 as seen, but this run marked it new
+    final("## Stories\n1. **[Old](https://x.test/a)**\n   *[discussion](https://news.ycombinator.com/item?id=42)*\n2. **[New](https://x.test/b)**\n   *[discussion](https://news.ycombinator.com/item?id=7)*\n   Why it matters."),
+  ]);
+  const q = await enqueue(t.env, a, Date.UTC(2026, 9, 9, 7));
+  if (q.status !== "queued") throw new Error("not queued");
+  await execute(t.env, q.id);
+  expect((await run(q.id))?.output).toBe(
+    "## Stories\n2. **[New](https://x.test/b)**\n   *[discussion](https://news.ycombinator.com/item?id=7)*\n   Why it matters.",
+  );
+  expect((await steps(q.id)).at(-1)?.tool).toBe("dedup");
+});
+
+it("matches seen keys whole, not as part of a longer id or url", () => {
+  const report = "- a item?id=420\n- b https://x.test/1/more\n- c https://x.test/1\n- d id=42.";
+  expect(dropSeen(report, ["42", "https://x.test/1"]).kept).toBe("- a item?id=420\n- b https://x.test/1/more");
 });
