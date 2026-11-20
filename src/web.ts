@@ -169,7 +169,12 @@ async function dashboard(env: Env, notice: string | null) {
       </tr>`;
     })
     .join("");
+  // Reports from a reasoning model lead; runs that found nothing are counted, not listed.
+  const analysed = new Set(agents.filter((a) => a.reason_model).map((a) => a.name));
+  const quiet = runs.filter((r) => r.output === "NOTHING").length;
   const items = runs
+    .filter((r) => r.output !== "NOTHING")
+    .sort((x, y) => +analysed.has(y.agent) - +analysed.has(x.agent))
     .map((r, i) => {
       const s = trace.get(r.id) ?? [];
       const steps = s.length
@@ -209,7 +214,7 @@ async function dashboard(env: Env, notice: string | null) {
     <section><h2>Agents</h2>
     <div class="panel tbl"><table><thead><tr><th>Agent</th><th>Schedule (UTC)</th><th>Budget</th><th>Last run</th><th></th></tr></thead>
       <tbody>${rows || `<tr><td colspan="5"><small>No agents yet.</small></td></tr>`}</tbody></table></div></section>
-    <section><h2>Recent runs</h2>${items || "<p><small>No runs yet.</small></p>"}</section></main>`,
+    <section><h2>Recent runs</h2>${items || "<p><small>No runs yet.</small></p>"}${quiet ? `<p><small>${quiet} quiet run${quiet > 1 ? "s" : ""} with nothing to report not shown.</small></p>` : ""}</section></main>`,
     200,
     busy ? '<meta http-equiv="refresh" content="10">' : "",
   );

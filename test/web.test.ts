@@ -107,3 +107,18 @@ it("renders escaped markdown and publishes only ok reports of public agents", as
 it("refuses to serve anything with a weak RUN_TOKEN", async () => {
   expect((await handle(new Request("https://w.test/p/news"), { ...env, RUN_TOKEN: "short" })).status).toBe(500);
 });
+
+it("lists reasoning reports first and leaves quiet runs out of the dashboard", async () => {
+  await agent("plain");
+  await agent("deep", { reason_model: "big/analyst" });
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO runs (agent, slot, day, status, reserved, cost, output) VALUES ('deep', 10, '2026-01-02', 'ok', 0.05, 0.02, 'Deep report')"),
+    env.DB.prepare("INSERT INTO runs (agent, slot, day, status, reserved, cost, output) VALUES ('plain', 11, '2026-01-02', 'ok', 0.05, 0.02, 'Plain report')"),
+    env.DB.prepare("INSERT INTO runs (agent, slot, day, status, reserved, cost, output) VALUES ('plain', 12, '2026-01-02', 'ok', 0.05, 0.02, 'NOTHING')"),
+  ]);
+  const html = await (await req("/", { headers: { authorization: `Bearer ${env.RUN_TOKEN}` } })).text();
+  expect(html.indexOf("Deep report")).toBeGreaterThan(0);
+  expect(html.indexOf("Deep report")).toBeLessThan(html.indexOf("Plain report"));
+  expect(html).toMatch(/\d+ quiet runs? with nothing to report not shown/);
+  expect(html).not.toContain("<p>NOTHING</p>");
+});
