@@ -9,8 +9,13 @@ const url = { type: "object", properties: { url: { type: "string" } }, required:
 export const SPECS: Record<ToolName, { description: string; parameters: object }> = {
   fetch_page: {
     description:
-      "Fetch a URL with a plain HTTP GET and return its readable text. Fast and free, so try it first. Works for HTML, feeds, JSON and text; not for pages that need JavaScript.",
-    parameters: url,
+      "Fetch a URL with a plain HTTP GET and return its readable text. Fast and free, so try it first. Works for HTML, feeds, JSON and text; not for pages that need JavaScript. For a JSON API that returns a list, pass fields to keep only those keys on each item.",
+    parameters: {
+      type: "object",
+      properties: { url: { type: "string" }, fields: { type: "array", items: { type: "string" }, maxItems: 50 } },
+      required: ["url"],
+      additionalProperties: false,
+    },
   },
   browse: {
     description: "Load a URL in a real browser and return the rendered page as markdown. Use for JavaScript-heavy pages.",
@@ -42,23 +47,66 @@ const Url = z.url({ protocol: /^https?$/ });
 export async function callTool(env: Env, agent: Agent, name: string, rawArgs: string) {
   if (!(agent.tools as string[]).includes(name))
     return { content: `error: tool ${name} is not enabled for this agent`, cost: 0 };
+  // A host that echoes the credential back must not get it into the prompt, the trace or the report.
+  const key = secret(env, agent);
+  const hide = (s: string) => (key ? s.replaceAll(key, "[secret]") : s);
   try {
     const args = JSON.parse(rawArgs || "{}") as Record<string, unknown>;
     const r = await run(env, agent, name as ToolName, args);
-    return { content: r.content.slice(0, RESULT_CHARS), cost: r.cost };
+    return { content: hide(r.content).slice(0, RESULT_CHARS), cost: r.cost };
   } catch (e) {
-    return { content: `error: ${e instanceof Error ? e.message : String(e)}`, cost: 0 };
+    return { content: hide(`error: ${e instanceof Error ? e.message : String(e)}`), cost: 0 };
   }
+}
+
+const secret = (env: Env, agent: Agent) => {
+  const value = agent.auth && (env as unknown as Record<string, unknown>)[agent.auth.secret];
+  return typeof value === "string" && value ? value : undefined;
+};
+
+/** Keeps only `fields` on each object of a root array, or of the arrays one level down, so a long API list fits the result cap. */
+export function pick(json: unknown, fields: string[]): unknown {
+  const item = (v: unknown) =>
+    v && typeof v === "object" && !Array.isArray(v)
+      ? Object.fromEntries(fields.filter((f) => f in v).map((f) => [f, (v as Record<string, unknown>)[f]]))
+      : v;
+  if (Array.isArray(json)) return json.map(item);
+  if (!json || typeof json !== "object") return json;
+  return Object.fromEntries(Object.entries(json).map(([k, v]) => [k, Array.isArray(v) ? v.map(item) : v]));
 }
 
 async function run(env: Env, agent: Agent, name: ToolName, args: Record<string, unknown>) {
   switch (name) {
     case "fetch_page": {
-      const res = await fetch(Url.parse(args.url), {
-        headers: { "user-agent": "Mozilla/5.0 (compatible; watchd)", accept: "text/html,application/xml;q=0.9,*/*;q=0.8" },
+      const target = new URL(Url.parse(args.url));
+      const fields = z.array(z.string().min(1).max(100)).max(50).optional().parse(args.fields);
+      // The model picks URLs and pages can steer it, so the credential goes to the exact host over https and nowhere else.
+      const authed = agent.auth !== null && target.protocol === "https:" && target.host === agent.auth.host;
+      const key = secret(env, agent);
+      if (authed && !key) throw new Error(`secret ${agent.auth?.secret} is not set`);
+      const res = await fetch(target, {
+        headers: {
+          "user-agent": "Mozilla/5.0 (compatible; watchd)",
+          accept: "text/html,application/xml;q=0.9,*/*;q=0.8",
+          ...(authed && { authorization: `Bearer ${key}` }),
+        },
+        // A redirect could carry the credential to another host, so the model gets the target back and fetches it itself.
+        redirect: authed ? "manual" : "follow",
         signal: AbortSignal.timeout(15_000),
       });
+      if (authed && res.status >= 300 && res.status < 400)
+        return { content: `HTTP ${res.status}
+
+Redirect to ${res.headers.get("location")}, not followed.`, cost: 0 };
       const body = await head(res);
+      if (fields)
+        try {
+          return { content: `HTTP ${res.status}
+
+${JSON.stringify(pick(JSON.parse(body), fields))}`, cost: 0 };
+        } catch {
+          // Not JSON (an error page, say): the model gets the text below.
+        }
       const type = res.headers.get("content-type") ?? "";
       // Feeds carry escaped HTML inside XML, so they need a second pass.
       const text = /html/.test(type) ? htmlToText(body) : /xml/.test(type) ? htmlToText(htmlToText(body)) : body;

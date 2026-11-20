@@ -41,6 +41,7 @@ export async function agent(name: string, over: Partial<Agent> = {}): Promise<Ag
     max_steps: 8,
     memory: true,
     public: false,
+    auth: null,
     ...over,
   };
   await saveAgent(env, a);

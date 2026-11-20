@@ -104,6 +104,7 @@ async function submitAgent(env: Env, form: FormData) {
     max_steps: Number(text("max_steps")),
     memory: form.get("memory") === "on",
     public: form.get("public") === "on",
+    auth: text("auth_host") || text("auth_secret") ? { host: text("auth_host"), secret: text("auth_secret") } : null,
   };
   const parsed = AgentInput.safeParse(draft);
   const creating = form.get("mode") === "create";
@@ -226,6 +227,7 @@ const BLANK: Agent = {
   max_steps: 8,
   memory: true,
   public: false,
+  auth: null,
 };
 
 function agentPage(env: Env, existing: Agent | null, error = "", draft?: Agent) {
@@ -252,6 +254,10 @@ function agentPage(env: Env, existing: Agent | null, error = "", draft?: Agent) 
       </div>
       <label>Model <small>OpenRouter slug; empty = ${esc(env.DEFAULT_MODEL)}</small><input name="model" value="${v(a.model)}"></label>
       <fieldset><legend>Tools</legend>${tools}</fieldset>
+      <div class="row">
+        <label>API host <small>fetch_page sends the secret as a Bearer token to this host only; empty = none</small><input name="auth_host" value="${v(a.auth?.host ?? null)}" placeholder="api.example.com"></label>
+        <label>Secret name <small>a Worker secret</small><input name="auth_secret" value="${v(a.auth?.secret ?? null)}" placeholder="EXAMPLE_API_KEY"></label>
+      </div>
       <label class="opt"><input type="checkbox" name="memory"${check(a.memory)}><span><b>Memory</b> <small>keep notes between runs</small></span></label>
       <label class="opt"><input type="checkbox" name="public"${check(a.public)}><span><b>Public</b> <small>publish reports at /p/${v(a.name) || "name"}</small></span></label>
       <div><button>Save</button></div>

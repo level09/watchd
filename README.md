@@ -13,7 +13,7 @@ for agents marked public.
 
 | Tool | What it does |
 | --- | --- |
-| `fetch_page` | Plain HTTP GET, returned as readable text (HTML, feeds, JSON) |
+| `fetch_page` | Plain HTTP GET, returned as readable text (HTML, feeds, JSON); `fields` trims long JSON lists |
 | `browse` | Real browser via Browser Run, page returned as markdown |
 | `links` | Real browser, every link on the page |
 | `web_search` | Web search through OpenRouter's `:online` models |
@@ -34,6 +34,10 @@ claude mcp add --transport http watchd https://watchd.<you>.workers.dev/mcp \
 Then ask Claude to "create a watchd agent that checks X every morning". The MCP
 tools are `list_agents`, `get_agent`, `save_agent`, `run_agent`, `get_run` and
 `list_runs`.
+
+An agent can also carry one API credential: an API host and the name of a Worker
+secret (`wrangler secret put EXAMPLE_API_KEY`). `fetch_page` sends it as a Bearer
+token to that exact host over https, never to any other host or across a redirect.
 
 ## Examples
 

@@ -42,6 +42,8 @@ it("creates, validates, runs and deletes an agent from the dashboard", async () 
     model: "",
     tools: ["fetch_page", "browse"],
     memory: "on",
+    auth_host: "api.example.test",
+    auth_secret: "EXAMPLE_API_KEY",
   };
 
   const bad = await post("/agents", { ...fields, schedule: "every day" });
@@ -60,7 +62,9 @@ it("creates, validates, runs and deletes an agent from the dashboard", async () 
     max_steps: 5,
     memory: true,
     public: false,
+    auth: { host: "api.example.test", secret: "EXAMPLE_API_KEY" },
   });
+  expect(await (await req("/agents/price-watch", { headers: { cookie } })).text()).toContain('name="auth_secret" value="EXAMPLE_API_KEY"');
   expect(await (await post("/agents", fields)).text()).toContain("already exists");
 
   const queued = await post("/run/price-watch", {});
