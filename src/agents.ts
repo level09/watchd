@@ -14,8 +14,11 @@ const validCron = (s: string) => {
   }
 };
 
-// The secrets watchd itself runs on can never be pointed at a host an agent names.
-const CORE_SECRETS = ["OPENROUTER_API_KEY", "RUN_TOKEN"];
+// The secrets watchd itself runs on can never be pointed at a host an agent names. One exception: the OpenRouter
+// key may go back to OpenRouter itself, for its public datasets. fetch_page is GET only, so there it can read
+// (including account figures) but cannot spend credit. Do not widen this to other hosts or to RUN_TOKEN.
+const reserved = (a: { host: string; secret: string }) =>
+  a.secret === "RUN_TOKEN" || (a.secret === "OPENROUTER_API_KEY" && a.host !== "openrouter.ai");
 
 export const AgentInput = z.strictObject({
   name: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/, "lowercase letters, digits and dashes, up to 40"),
@@ -30,11 +33,9 @@ export const AgentInput = z.strictObject({
   auth: z
     .strictObject({
       host: z.string().regex(/^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/, "a bare hostname, e.g. api.example.com"),
-      secret: z
-        .string()
-        .regex(/^[A-Z][A-Z0-9_]{0,63}$/, "the name of a Worker secret, e.g. EXAMPLE_API_KEY")
-        .refine((s) => !CORE_SECRETS.includes(s), "this secret is reserved for watchd"),
+      secret: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/, "the name of a Worker secret, e.g. EXAMPLE_API_KEY"),
     })
+    .refine((a) => !reserved(a), { path: ["secret"], message: "this secret is reserved for watchd" })
     .nullable()
     .default(null),
   reason_model: z.string().trim().min(1).max(100).nullable().default(null),

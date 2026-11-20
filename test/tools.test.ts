@@ -75,6 +75,11 @@ it("refuses to use watchd's own secrets as an agent credential", () => {
     expect(AgentInput.safeParse({ ...base, auth: { host: "api.test", secret } }).success, secret).toBe(false);
   expect(AgentInput.safeParse({ ...base, auth: { host: "https://api.test", secret: "API_KEY" } }).success).toBe(false);
   expect(AgentInput.parse(base).auth).toBeNull();
+  // The OpenRouter key may only go back to OpenRouter itself; RUN_TOKEN goes nowhere.
+  const or = (host: string, secret = "OPENROUTER_API_KEY") => AgentInput.safeParse({ ...base, auth: { host, secret } }).success;
+  expect(or("openrouter.ai")).toBe(true);
+  for (const host of ["api.openrouter.ai", "openrouter.ai.evil.test", "evil.test"]) expect(or(host), host).toBe(false);
+  expect(or("openrouter.ai", "RUN_TOKEN")).toBe(false);
 });
 
 it("keeps only the requested fields on JSON list items", async () => {

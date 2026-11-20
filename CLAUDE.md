@@ -39,7 +39,7 @@ migrations/        - D1 schema
 - Tool errors go back to the model as text; only provider failures, budget, or a missing final answer fail a run
 - `seen` is deterministic dedup by agent and key; model memory (`===MEMORY===`, split on the first marker) is for soft context only
 - Tool results and memory are declared untrusted data in the system prompt; reports are escaped before markdown rendering
-- Agent `auth { host, secret }` sends a named Worker secret as a Bearer token from `fetch_page` only: https, exact host, redirects not followed, value scrubbed from tool results. The model picks URLs, so nothing else may ever carry it
+- Agent `auth { host, secret }` sends a named Worker secret as a Bearer token from `fetch_page` only: https, exact host, redirects not followed, value scrubbed from tool results. `RUN_TOKEN` can never be the secret, and `OPENROUTER_API_KEY` only for host `openrouter.ai` (GET only, so it cannot spend). The model picks URLs, so nothing else may ever carry it
 - `reason_model` adds one analyst call after the loop: the agent's model collects, the analyst writes the report from its findings plus the agent prompt as brief, and owns memory. Prompt text from a line starting `For the analyst:` is withheld from the collector. Both stages draw on the same reservation. `OWNER_CONTEXT` (a secret, it names private work) is appended to both system prompts
 - Browser Run quick actions need `"remote": true` on the binding even in `wrangler dev`
 - `RUN_TOKEN` (24+ chars) gates everything private: bearer for scripts and MCP, a SameSite=Strict cookie holding a hash of the token for the dashboard
