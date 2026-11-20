@@ -18,4 +18,6 @@ export interface Env {
   DAILY_CAP_USD: string;
   EMAIL_FROM?: string;
   NOTIFY_EMAIL?: string;
+  /** Who the reports are for; a secret, because it names private work. */
+  OWNER_CONTEXT?: string;
 }

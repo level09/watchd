@@ -136,3 +136,47 @@ it("matches seen keys whole, not as part of a longer id or url", () => {
   const report = "- a item?id=420\n- b https://x.test/1/more\n- c https://x.test/1\n- d id=42.";
   expect(dropSeen(report, ["42", "https://x.test/1"]).kept).toBe("- a item?id=420\n- b https://x.test/1/more");
 });
+
+it("hands new findings to the reasoning model with the owner context, and lets it own memory", async () => {
+  const a = await agent("deals", { reason_model: "big/analyst", prompt: "Find new Go jobs.\n\nFor the analyst: judge fit." });
+  const t = setup(
+    [
+      call("seen", { keys: ["https://jobs.test/1", "https://jobs.test/2"] }),
+      final("- Old one https://jobs.test/2\n- Go dev https://jobs.test/1"),
+      final("### Go dev\n**So what:** apply.\n===MEMORY===\n- second Go role this week", 0.01),
+    ],
+    { OWNER_CONTEXT: "Builds agents on Workers." },
+  );
+  await env.DB.prepare("INSERT INTO seen (agent, key) VALUES ('deals', 'https://jobs.test/2')").run();
+  const q = await enqueue(t.env, a, Date.UTC(2026, 9, 10, 7));
+  if (q.status !== "queued") throw new Error("not queued");
+  await execute(t.env, q.id);
+
+  expect(await run(q.id)).toEqual({ status: "ok", cost: expect.closeTo(0.013), output: "### Go dev\n**So what:** apply.", error: null });
+  expect((await steps(q.id)).map((s) => s.tool)).toEqual(["model", "seen", "model", "analyst"]);
+  const [collector, , analyst] = t.bodies as { model: string; tools?: unknown; messages: { content: string }[] }[];
+  // The collector is not asked for memory; the analyst gets the brief, only the unseen finding, the notes and the owner.
+  expect(collector.messages[0].content).toContain("<owner>\nBuilds agents on Workers.\n</owner>");
+  expect(collector.messages[1].content).not.toContain("===MEMORY===");
+  expect(collector.messages[1].content).toMatch(/Find new Go jobs\.$/);
+  expect(analyst.model).toBe("big/analyst");
+  expect(analyst.tools).toBeUndefined();
+  expect(analyst.messages[0].content).toContain("<owner>\nBuilds agents on Workers.\n</owner>");
+  expect(analyst.messages[1].content).toContain("<brief>\nFind new Go jobs.\n\nFor the analyst: judge fit.\n</brief>");
+  expect(analyst.messages[1].content).toContain("<findings>\n- Go dev https://jobs.test/1\n</findings>");
+  expect(analyst.messages[1].content).toContain("<memory>");
+  expect(await env.DB.prepare("SELECT body FROM memory WHERE agent = 'deals'").first("body")).toBe("- second Go role this week");
+});
+
+it("skips the reasoning model on NOTHING and when the collector spent the budget", async () => {
+  const a = await agent("idle", { reason_model: "big/analyst", budget: 0.01 });
+  const t = setup([final("NOTHING"), final("- Go dev https://jobs.test/1", 0.02)]);
+  const q = await enqueue(t.env, a, Date.UTC(2026, 9, 11, 7));
+  const q2 = await enqueue(t.env, a, Date.UTC(2026, 9, 11, 8));
+  if (q.status !== "queued" || q2.status !== "queued") throw new Error("not queued");
+  await execute(t.env, q.id);
+  expect(await run(q.id)).toMatchObject({ status: "ok", output: "NOTHING", cost: 0.002 });
+  await execute(t.env, q2.id);
+  expect(await run(q2.id)).toMatchObject({ status: "error", error: "budget_exhausted", cost: 0.02 });
+  expect(t.bodies).toHaveLength(2);
+});

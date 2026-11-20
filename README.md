@@ -39,6 +39,11 @@ An agent can also carry one API credential: an API host and the name of a Worker
 secret (`wrangler secret put EXAMPLE_API_KEY`). `fetch_page` sends it as a Bearer
 token to that exact host over https, never to any other host or across a redirect.
 
+Set a reasoning model on an agent to split the run in two: the agent's own cheap
+model fetches, filters and dedups, then the reasoning model writes the report as an
+analyst (mechanism, where it breaks, what it means for you, one next step) within
+the same budget. Tell it who you are with `wrangler secret put OWNER_CONTEXT`.
+
 ## Examples
 
 `examples/` holds ten starting points across different jobs, each a complete

@@ -105,6 +105,7 @@ async function submitAgent(env: Env, form: FormData) {
     memory: form.get("memory") === "on",
     public: form.get("public") === "on",
     auth: text("auth_host") || text("auth_secret") ? { host: text("auth_host"), secret: text("auth_secret") } : null,
+    reason_model: text("reason_model") || null,
   };
   const parsed = AgentInput.safeParse(draft);
   const creating = form.get("mode") === "create";
@@ -228,6 +229,7 @@ const BLANK: Agent = {
   memory: true,
   public: false,
   auth: null,
+  reason_model: null,
 };
 
 function agentPage(env: Env, existing: Agent | null, error = "", draft?: Agent) {
@@ -253,6 +255,7 @@ function agentPage(env: Env, existing: Agent | null, error = "", draft?: Agent) 
         <label>Max steps<input name="max_steps" type="number" min="1" max="30" value="${a.max_steps}" required></label>
       </div>
       <label>Model <small>OpenRouter slug; empty = ${esc(env.DEFAULT_MODEL)}</small><input name="model" value="${v(a.model)}"></label>
+      <label>Reasoning model <small>OpenRouter slug; writes the report from what the model above collected; instructions after a line starting \"For the analyst:\" go only to it; empty = one stage</small><input name="reason_model" value="${v(a.reason_model)}"></label>
       <fieldset><legend>Tools</legend>${tools}</fieldset>
       <div class="row">
         <label>API host <small>fetch_page sends the secret as a Bearer token to this host only; empty = none</small><input name="auth_host" value="${v(a.auth?.host ?? null)}" placeholder="api.example.com"></label>

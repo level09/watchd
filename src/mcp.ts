@@ -40,7 +40,7 @@ export async function mcp(request: Request, env: Env): Promise<Response> {
   server.registerTool(
     "save_agent",
     {
-      description: `Create or replace an agent. The agent runs an LLM tool loop in a Cloudflare Worker: it may call the enabled tools up to max_steps times, then writes a markdown report. schedule is a five-field UTC cron, or null to run only on demand. budget is the USD ceiling per run. auth { host, secret } makes fetch_page send the named Worker secret as a Bearer token to that exact https host and to no other. Available tools:\n${tools}`,
+      description: `Create or replace an agent. The agent runs an LLM tool loop in a Cloudflare Worker: it may call the enabled tools up to max_steps times, then writes a markdown report. schedule is a five-field UTC cron, or null to run only on demand. budget is the USD ceiling per run. auth { host, secret } makes fetch_page send the named Worker secret as a Bearer token to that exact https host and to no other. reason_model adds a second stage: the agent's model collects and dedups, then that model writes the report as an analyst (mechanism, where it breaks, transfer, next step) within the same budget; turn memory on with it so it can name repeats, and put instructions meant only for the analyst after a line starting \"For the analyst:\". Available tools:\n${tools}`,
       inputSchema: {
         ...AgentInput.shape,
         schedule: AgentInput.shape.schedule.default(null),

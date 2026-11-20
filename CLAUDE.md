@@ -40,6 +40,7 @@ migrations/        - D1 schema
 - `seen` is deterministic dedup by agent and key; model memory (`===MEMORY===`, split on the first marker) is for soft context only
 - Tool results and memory are declared untrusted data in the system prompt; reports are escaped before markdown rendering
 - Agent `auth { host, secret }` sends a named Worker secret as a Bearer token from `fetch_page` only: https, exact host, redirects not followed, value scrubbed from tool results. The model picks URLs, so nothing else may ever carry it
+- `reason_model` adds one analyst call after the loop: the agent's model collects, the analyst writes the report from its findings plus the agent prompt as brief, and owns memory. Prompt text from a line starting `For the analyst:` is withheld from the collector. Both stages draw on the same reservation. `OWNER_CONTEXT` (a secret, it names private work) is appended to both system prompts
 - Browser Run quick actions need `"remote": true` on the binding even in `wrangler dev`
 - `RUN_TOKEN` (24+ chars) gates everything private: bearer for scripts and MCP, a SameSite=Strict cookie holding a hash of the token for the dashboard
 - No `secrets.required` block on purpose: it blocks the first deploy until secrets exist and makes local dev drop undeclared `.dev.vars` entries; wrangler reads only `.dev.vars` when it exists, not process env

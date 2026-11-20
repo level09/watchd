@@ -37,6 +37,7 @@ export const AgentInput = z.strictObject({
     })
     .nullable()
     .default(null),
+  reason_model: z.string().trim().min(1).max(100).nullable().default(null),
 });
 export type Agent = z.infer<typeof AgentInput>;
 
@@ -48,7 +49,7 @@ const fromRow = (r: Row): Agent => ({
   public: r.public === 1,
   auth: r.auth ? JSON.parse(r.auth) : null,
 });
-const COLUMNS = "name, prompt, schedule, budget, model, tools, max_steps, memory, public, auth";
+const COLUMNS = "name, prompt, schedule, budget, model, tools, max_steps, memory, public, auth, reason_model";
 
 export async function listAgents(env: Env): Promise<Agent[]> {
   const { results } = await env.DB.prepare(`SELECT ${COLUMNS} FROM agents ORDER BY name`).all<Row>();
@@ -62,10 +63,10 @@ export async function getAgent(env: Env, name: string): Promise<Agent | null> {
 
 export async function saveAgent(env: Env, a: Agent) {
   await env.DB.prepare(
-    `INSERT INTO agents (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO agents (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (name) DO UPDATE SET prompt = excluded.prompt, schedule = excluded.schedule,
        budget = excluded.budget, model = excluded.model, tools = excluded.tools, max_steps = excluded.max_steps,
-       memory = excluded.memory, public = excluded.public, auth = excluded.auth, updated_at = CURRENT_TIMESTAMP`,
+       memory = excluded.memory, public = excluded.public, auth = excluded.auth, reason_model = excluded.reason_model, updated_at = CURRENT_TIMESTAMP`,
   )
     .bind(
       a.name,
@@ -78,6 +79,7 @@ export async function saveAgent(env: Env, a: Agent) {
       +a.memory,
       +a.public,
       a.auth && JSON.stringify(a.auth),
+      a.reason_model,
     )
     .run();
 }

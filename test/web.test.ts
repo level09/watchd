@@ -44,6 +44,7 @@ it("creates, validates, runs and deletes an agent from the dashboard", async () 
     memory: "on",
     auth_host: "api.example.test",
     auth_secret: "EXAMPLE_API_KEY",
+    reason_model: "big/analyst",
   };
 
   const bad = await post("/agents", { ...fields, schedule: "every day" });
@@ -63,6 +64,7 @@ it("creates, validates, runs and deletes an agent from the dashboard", async () 
     memory: true,
     public: false,
     auth: { host: "api.example.test", secret: "EXAMPLE_API_KEY" },
+    reason_model: "big/analyst",
   });
   expect(await (await req("/agents/price-watch", { headers: { cookie } })).text()).toContain('name="auth_secret" value="EXAMPLE_API_KEY"');
   expect(await (await post("/agents", fields)).text()).toContain("already exists");

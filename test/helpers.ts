@@ -42,6 +42,7 @@ export async function agent(name: string, over: Partial<Agent> = {}): Promise<Ag
     memory: true,
     public: false,
     auth: null,
+    reason_model: null,
     ...over,
   };
   await saveAgent(env, a);
